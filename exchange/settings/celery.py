@@ -21,7 +21,7 @@ DEFAULT_CRYPTO_PROCESS_NEW_BLOCKS_PERIOD = crontab(minute='*')
 CRYPTO_AUTO_SCHEDULE_CONF = [
     {
         'currency': 'BTC',
-        'enabled': True,
+        'enabled': env('COMMON_TASKS_BTC', default=False, cast=bool),
         'payouts_period': False,
         'accumulate_period': DEFAULT_CRYPTO_ACCUMULATE_PERIOD,
         'process_new_blocks_period': DEFAULT_CRYPTO_PROCESS_NEW_BLOCKS_PERIOD,

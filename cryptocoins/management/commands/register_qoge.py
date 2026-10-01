@@ -5,9 +5,10 @@ from django.core.management.base import BaseCommand
 from django.db.transaction import atomic
 
 from bots.models import BotConfig
-from core.models import FeesAndLimits, PairSettings, WithdrawalFee
+from core.models import DisabledCoin, FeesAndLimits, PairSettings, WithdrawalFee
 from core.models.facade import CoinInfo
 from core.models.inouts.pair import Pair
+from cryptocoins.coins.btc import BTC
 from cryptocoins.coins.qoge import QOGE, QOGE_CURRENCY
 from cryptocoins.coins.qoge.service import QOGECoinService
 from cryptocoins.models import Keeper, LastProcessedBlock
@@ -39,11 +40,15 @@ class Command(BaseCommand):
                 'decimals': 8,
                 'index': 0,
                 'is_base': True,
-                'tx_explorer': '',
+                'tx_explorer': 'https://explorer.qoge.org/tx/',
                 'links': {
                     'official': {
                         'href': 'https://qoge.org',
                         'title': 'qoge.org',
+                    },
+                    'exp': {
+                        'href': 'https://explorer.qoge.org',
+                        'title': 'Explorer',
                     },
                 },
             },
@@ -129,8 +134,26 @@ class Command(BaseCommand):
                 self.stdout.write('QOGE keeper {}'.format(keeper.user_wallet.address))
                 self.stdout.write(str(info))
 
-        self.stdout.write(self.style.SUCCESS('QOGE coin and QOGE-USDT pair are registered'))
-        self.stdout.write(
-            'Set PairSettings.custom_price for QOGE-USDT; there is no Binance ticker. '
-            'Set QOGE_SAFE_ADDR to a cold wallet (legacy q..., bech32 bq1q..., or P2QPK bq1z...).'
+        DisabledCoin.objects.update_or_create(
+            currency=BTC,
+            defaults={
+                'disable_all': True,
+                'disable_stack': True,
+                'disable_pairs': True,
+                'disable_exchange': True,
+                'disable_withdrawals': True,
+                'disable_topups': True,
+            },
         )
+        try:
+            btc_usdt = Pair.get('BTC-USDT')
+            PairSettings.objects.filter(pair=btc_usdt).update(
+                is_enabled=False,
+                is_autoorders_enabled=False,
+            )
+            BotConfig.objects.filter(name='BTC-USDT').update(enabled=False)
+        except Exception:
+            pass
+
+        self.stdout.write(self.style.SUCCESS('QOGE coin and QOGE-USDT pair are registered'))
+        self.stdout.write('BTC is disabled. QOGE-USDT needs PairSettings.custom_price (no Binance ticker).')

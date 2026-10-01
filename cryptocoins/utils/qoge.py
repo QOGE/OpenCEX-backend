@@ -20,7 +20,7 @@ def generate_qoge_multisig_keeper(log=None) -> Tuple[OrderedDict, Keeper]:
     ad2 = service.create_new_wallet(addr_import=False)
     ad3 = service.create_new_wallet(addr_import=False)
 
-    is_segwit = not getattr(settings, 'QOGE_ADDRESS_LEGACY', False)
+    is_segwit = not getattr(settings, 'QOGE_ADDRESS_LEGACY', True)
     pub_keys = [ad1.public_key, ad2.public_key, ad3.public_key]
     if is_segwit:
         script, address = qoge.mk_multsig_segwit_address(*pub_keys, num_required=2)

@@ -70,14 +70,14 @@ class QOGECoinService(BitCoreCoinServiceBase):
         self.log.info('Address %s %s imported via descriptor', self.currency, address)
 
     def create_new_wallet(self, label: str = '', addr_import: bool = True):
-        """P2WPKH (bq1q...) by default; QOGE_ADDRESS_LEGACY=True for q... P2PKH."""
+        """Legacy P2PKH (q...) by default. P2QPK/bech32 deposits still credit if imported."""
         import os
         from cryptos import entropy_to_words
         from core.consts.currencies import BlockchainAccount
 
         self.log.info('Create new %s wallet', self.currency.code)
         words = entropy_to_words(os.urandom(20))
-        if getattr(settings, 'QOGE_ADDRESS_LEGACY', False):
+        if getattr(settings, 'QOGE_ADDRESS_LEGACY', True):
             wallet = self.crypto_coin.wallet(words)
         else:
             wallet = self.crypto_coin.p2wpkh_wallet(words)

@@ -23,8 +23,8 @@ NODES_CONFIG = {
     'btc': {
         'host': env('BTC_NODE_HOST', default='localhost'),
         'port': env('BTC_NODE_PORT', default=8333),
-        'username': env('BTC_NODE_USER'),
-        'password': env('BTC_NODE_PASS'),
+        'username': env('BTC_NODE_USER', default=''),
+        'password': env('BTC_NODE_PASS', default=''),
     },
     'qoge': {
         'host': env('QOGE_NODE_HOST', default='localhost'),

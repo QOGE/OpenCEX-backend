@@ -397,13 +397,6 @@ if is_section_enabled('stats'):
                 'queue': 'stats',
             }
         },
-        'cache_bitcoin_sat_per_byte': {
-            'task': 'cryptocoins.tasks.btc.cache_bitcoin_sat_per_byte',
-            'schedule': settings.SAT_PER_BYTES_UPDATE_PERIOD,
-            'options': {
-                'queue': 'stats',
-            }
-        },
         'cache_qogecoin_sat_per_byte': {
             'task': 'cryptocoins.tasks.qoge.cache_qogecoin_sat_per_byte',
             'schedule': settings.SAT_PER_BYTES_UPDATE_PERIOD,

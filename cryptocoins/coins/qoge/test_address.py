@@ -11,6 +11,7 @@ is_valid_qoge_address = _utils.is_valid_qoge_address
 
 VALID = [
     'qXv4SyttDFCGb7rFyDfZwKdPHShmUw7uP4',  # P2PKH
+    'qYVi6JTWot5bNDkFkXbXWZJwcGtqBb47SC',  # cold wallet P2PKH
     'iQ431DzyoCKeGRASSrST5FKxZvBA5Kiw5B',  # P2SH
     'bq1qhhdlfn9n9vwwxuccxdga3agwsx4x49np6eztjm',  # P2WPKH
     'bq1puwkqf9k4tj58t6d6vaveprr9dfpa9ap3pfrusu5964l76s7mu2cqts3hv4',  # P2TR

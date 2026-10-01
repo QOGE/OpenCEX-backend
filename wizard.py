@@ -59,6 +59,7 @@ def main():
     IS_TRON = env('COMMON_TASKS_TRON', default=True, cast=bool)
     IS_BSC = env('COMMON_TASKS_BNB', default=True, cast=bool)
     IS_MATIC = env('COMMON_TASKS_MATIC', default=True, cast=bool)
+    IS_BTC = env('COMMON_TASKS_BTC', default=False, cast=bool)
 
     coin_list = [
         ETH,
@@ -197,14 +198,14 @@ def main():
                     'decimals': 8,
                     'index': 0,
                     'is_base': True,
-                    'tx_explorer': '',
+                    'tx_explorer': 'https://explorer.qoge.org/tx/',
                     'links': {
                         "official": {
                             "href": "https://qoge.org",
                             "title": "qoge.org"
                         },
                         "exp": {
-                            "href": "",
+                            "href": "https://explorer.qoge.org",
                             "title": "Explorer"
                         },
                     }
@@ -467,6 +468,22 @@ def main():
         ],
     }
 
+    if not IS_BTC:
+        coin_info[BTC].append(
+            {
+                'model': DisabledCoin,
+                'find': {'currency': BTC},
+                'attributes': {
+                    'disable_all': True,
+                    'disable_stack': True,
+                    'disable_pairs': True,
+                    'disable_exchange': True,
+                    'disable_withdrawals': True,
+                    'disable_topups': True,
+                },
+            },
+        )
+
     if not IS_BSC:
         coin_info[BNB].append(
             {
@@ -500,7 +517,7 @@ def main():
         )
 
     if not IS_MATIC:
-        coin_info[TRX].append(
+        coin_info[MATIC].append(
             {
                 'model': DisabledCoin,
                 'find': {'currency': MATIC},
@@ -595,8 +612,8 @@ def main():
         pair_list = {
             Pair.get('BTC-USDT'): {
                 PairSettings: {
-                    'is_enabled': True,
-                    'is_autoorders_enabled': True,
+                    'is_enabled': IS_BTC,
+                    'is_autoorders_enabled': IS_BTC,
                     'price_source': PairSettings.PRICE_SOURCE_EXTERNAL,
                     'custom_price': 0,
                     'deviation': 0.99000000,
@@ -617,7 +634,7 @@ def main():
                     'low_orders_max_match_size': 0.0029,
                     'low_orders_spread_size': 200,
                     'low_orders_min_order_size': 0.0003,
-                    'enabled': True,
+                    'enabled': IS_BTC,
                 }
             },
             Pair.get('ETH-USDT'): {
@@ -813,24 +830,27 @@ def main():
             site.name = settings.PROJECT_NAME
             site.save()
 
-        service = BTCCoinService()
-        last_processed_block_instance, _ = LastProcessedBlock.objects.get_or_create(
-            currency=BTC_CURRENCY
-        )
-        last_processed_block_instance.block_id = service.get_last_network_block_id()
-        last_processed_block_instance.save()
+        if IS_BTC:
+            service = BTCCoinService()
+            last_processed_block_instance, _ = LastProcessedBlock.objects.get_or_create(
+                currency=BTC_CURRENCY
+            )
+            last_processed_block_instance.block_id = service.get_last_network_block_id()
+            last_processed_block_instance.save()
 
-        # btc
-        if not Keeper.objects.filter(currency=BTC_CURRENCY).exists():
-            btc_info, btc_keeper = generate_btc_multisig_keeper()
-            to_write.append('BTC Info')
-            to_write.append(f'Keeper address: {btc_keeper.user_wallet.address}')
-            to_write.append('private data:')
-            to_write.append(json.dumps(btc_info, indent=4))
-            to_write.append('='*10)
+            if not Keeper.objects.filter(currency=BTC_CURRENCY).exists():
+                btc_info, btc_keeper = generate_btc_multisig_keeper()
+                to_write.append('BTC Info')
+                to_write.append(f'Keeper address: {btc_keeper.user_wallet.address}')
+                to_write.append('private data:')
+                to_write.append(json.dumps(btc_info, indent=4))
+                to_write.append('='*10)
+            else:
+                to_write.append('BTC Info')
+                to_write.append('Keeper exists, see previous file')
+                to_write.append('='*10)
         else:
-            to_write.append('BTC Info')
-            to_write.append('Keeper exists, see previous file')
+            to_write.append('BTC disabled (COMMON_TASKS_BTC=False)')
             to_write.append('='*10)
 
         qoge_service = QOGECoinService()

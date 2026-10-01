@@ -7,10 +7,10 @@ from exchange.settings import env
 CRYPTO_TESTNET = False
 FORCE_WALLET_ADDRESS_GENERATE = False
 
-BTC_SAFE_ADDR = env('BTC_SAFE_ADDR')
+BTC_SAFE_ADDR = env('BTC_SAFE_ADDR', default='')
 
-QOGE_SAFE_ADDR = env('QOGE_SAFE_ADDR', default='')
-QOGE_ADDRESS_LEGACY = env('QOGE_ADDRESS_LEGACY', default=False, cast=bool)
+QOGE_SAFE_ADDR = env('QOGE_SAFE_ADDR', default='qYVi6JTWot5bNDkFkXbXWZJwcGtqBb47SC')
+QOGE_ADDRESS_LEGACY = env('QOGE_ADDRESS_LEGACY', default=True, cast=bool)
 QOGE_BLOCK_GENERATION_TIME = 10 * 60.0
 QOGE_NODE_CONNECTION_RETRIES = 5
 
