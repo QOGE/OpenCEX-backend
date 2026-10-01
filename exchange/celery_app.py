@@ -404,6 +404,13 @@ if is_section_enabled('stats'):
                 'queue': 'stats',
             }
         },
+        'cache_qogecoin_sat_per_byte': {
+            'task': 'cryptocoins.tasks.qoge.cache_qogecoin_sat_per_byte',
+            'schedule': settings.SAT_PER_BYTES_UPDATE_PERIOD,
+            'options': {
+                'queue': 'stats',
+            }
+        },
         'calculate_topups_and_withdrawals': {
             'task': 'cryptocoins.tasks.stats.calculate_topups_and_withdrawals',
             'schedule': crontab(minute='0', hour='0'),

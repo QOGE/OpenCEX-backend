@@ -1,4 +1,5 @@
 from cryptos import Bitcoin
+from cryptocoins.coins.qoge.coin import QogeCoin
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
@@ -9,6 +10,7 @@ from cryptocoins.coins.trx.tron import tron_manager
 from lib.cipher import AESCoderDecoder
 
 CryptoBitcoin = Bitcoin()
+CryptoQoge = QogeCoin()
 
 
 class BaseKeySerializer(serializers.Serializer):
@@ -45,6 +47,20 @@ class BTCKeySerializer(BaseKeySerializer):
         except AssertionError as e:
             raise ValidationError("Bad format private key")
 
+        return key
+
+
+class QOGEKeySerializer(BaseKeySerializer):
+    def validate_key(self, key):
+        # Compressed WIF with prefix 92 starts with E and is 52 chars.
+        if len(key) != 52:
+            raise ValidationError("Bad format private key!")
+        if key[0] not in ['E']:
+            raise ValidationError("Bad format private key.")
+        try:
+            CryptoQoge.privtopub(key)
+        except AssertionError:
+            raise ValidationError("Bad format private key")
         return key
 
 

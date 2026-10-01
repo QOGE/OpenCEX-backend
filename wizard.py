@@ -19,6 +19,7 @@ from django.db.transaction import atomic
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from cryptocoins.coins.btc.service import BTCCoinService
+from cryptocoins.coins.qoge.service import QOGECoinService
 from cryptocoins.models import Keeper, GasKeeper, LastProcessedBlock
 from cryptocoins.utils.commons import create_keeper
 
@@ -34,6 +35,7 @@ from core.models.facade import CoinInfo
 from core.models.inouts.transaction import REASON_MANUAL_TOPUP
 from core.models.inouts.pair import Pair, PAIRS_LIST
 from cryptocoins.coins.btc import BTC, BTC_CURRENCY
+from cryptocoins.coins.qoge import QOGE, QOGE_CURRENCY
 from cryptocoins.coins.eth import ETH
 from cryptocoins.coins.usdt import USDT
 from cryptocoins.coins.bnb import BNB
@@ -41,6 +43,7 @@ from cryptocoins.coins.trx import TRX
 from cryptocoins.coins.matic import MATIC
 
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
+from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
 
 from exchange.settings import env
 from bots.models import BotConfig
@@ -64,6 +67,7 @@ def main():
         BNB,
         TRX,
         MATIC,
+        QOGE,
     ]
     coin_info = {
         ETH: [
@@ -180,6 +184,57 @@ def main():
                 'find': {'currency': BTC},
                 'attributes': {
                     'blockchain_currency': BTC,
+                    'address_fee': 0.00000001
+                },
+            },
+        ],
+        QOGE: [
+            {
+                'model': CoinInfo,
+                'find': {'currency': QOGE},
+                'attributes': {
+                    'name': 'Qogecoin',
+                    'decimals': 8,
+                    'index': 0,
+                    'is_base': True,
+                    'tx_explorer': '',
+                    'links': {
+                        "official": {
+                            "href": "https://qoge.org",
+                            "title": "qoge.org"
+                        },
+                        "exp": {
+                            "href": "",
+                            "title": "Explorer"
+                        },
+                    }
+                },
+            },
+            {
+                'model': FeesAndLimits,
+                'find': {'currency': QOGE},
+                'attributes': {
+                    'limits_deposit_min': 0.00020000,
+                    'limits_deposit_max': 100,
+                    'limits_withdrawal_min': 0.00020000,
+                    'limits_withdrawal_max': 5,
+                    'limits_order_min': 0.00030000,
+                    'limits_order_max': 5.00000000,
+                    'limits_code_max': 100.00000000,
+                    'limits_accumulation_min': 0.00020000,
+                    'fee_deposit_address': 0,
+                    'fee_deposit_code': 0,
+                    'fee_withdrawal_code': 0,
+                    'fee_order_limits': 0.00100000,
+                    'fee_order_market': 0.00200000,
+                    'fee_exchange_value': 0.00200000,
+                },
+            },
+            {
+                'model': WithdrawalFee,
+                'find': {'currency': QOGE},
+                'attributes': {
+                    'blockchain_currency': QOGE,
                     'address_fee': 0.00000001
                 },
             },
@@ -511,6 +566,7 @@ def main():
                 BNB: 10,
                 TRX: 100_000,
                 MATIC: 10_000,
+                QOGE: 3,
             }
 
             for currency_id, amount in topup_list.items():
@@ -645,6 +701,33 @@ def main():
                     'enabled': IS_BSC,
                 }
             },
+            Pair.get('QOGE-USDT'): {
+                PairSettings: {
+                    'is_enabled': True,
+                    'is_autoorders_enabled': True,
+                    'price_source': PairSettings.PRICE_SOURCE_CUSTOM,
+                    'custom_price': 0,
+                    'deviation': 0.99000000,
+                    'precisions': ['100', '10', '1', '0.1', '0.01']
+                },
+                BotConfig: {
+                    'name': 'QOGE-USDT',
+                    'user': bot,
+                    'strategy': BotConfig.TRADE_STRATEGY_DRAW,
+                    'instant_match': True,
+                    'ohlc_period': 5,
+                    'loop_period_random': True,
+                    'min_period': 75,
+                    'max_period': 280,
+                    'ext_price_delta': 0,
+                    'min_order_quantity': 0.001,
+                    'max_order_quantity': 0.05,
+                    'low_orders_max_match_size': 0.0029,
+                    'low_orders_spread_size': 200,
+                    'low_orders_min_order_size': 0.0003,
+                    'enabled': True,
+                }
+            },
             Pair.get('MATIC-USDT'): {
                 PairSettings: {
                     'is_enabled': IS_MATIC,
@@ -750,8 +833,36 @@ def main():
             to_write.append('Keeper exists, see previous file')
             to_write.append('='*10)
 
+        qoge_service = QOGECoinService()
+        last_processed_qoge, _ = LastProcessedBlock.objects.get_or_create(
+            currency=QOGE_CURRENCY
+        )
+        try:
+            last_processed_qoge.block_id = qoge_service.get_current_block_id()
+            last_processed_qoge.save()
+        except Exception:
+            pass
+
+        if not Keeper.objects.filter(currency=QOGE_CURRENCY).exists():
+            try:
+                qoge_info, qoge_keeper = generate_qoge_multisig_keeper()
+                to_write.append('QOGE Info')
+                to_write.append(f'Keeper address: {qoge_keeper.user_wallet.address}')
+                to_write.append('private data:')
+                to_write.append(json.dumps(qoge_info, indent=4))
+                to_write.append('='*10)
+            except Exception as exc:
+                to_write.append('QOGE Info')
+                to_write.append(f'Keeper generation failed: {exc}')
+                to_write.append('Run: python manage.py generate_keeper QOGE')
+                to_write.append('='*10)
+        else:
+            to_write.append('QOGE Info')
+            to_write.append('Keeper exists, see previous file')
+            to_write.append('='*10)
+
         for currency_id in coin_list:
-            if currency_id in [USDT, BTC]:
+            if currency_id in [USDT, BTC, QOGE]:
                 continue
 
             currency = Currency.get(currency_id)

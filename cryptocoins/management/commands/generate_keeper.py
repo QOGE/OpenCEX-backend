@@ -5,12 +5,14 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from cryptocoins.coins.btc import BTC_CURRENCY
+from cryptocoins.coins.qoge import QOGE_CURRENCY
 from core.consts.currencies import CRYPTO_WALLET_CREATORS, ALL_TOKEN_CURRENCIES
 from core.currency import Currency
 from core.models.cryptocoins import UserWallet
 from cryptocoins.models import GasKeeper
 from cryptocoins.models import Keeper
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
+from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
 from cryptocoins.utils.commons import create_keeper
 from lib.cipher import AESCoderDecoder
 
@@ -32,6 +34,10 @@ class Command(BaseCommand):
 
         if currency == BTC_CURRENCY:
             generate_btc_multisig_keeper(log)
+            return
+
+        if currency == QOGE_CURRENCY:
+            generate_qoge_multisig_keeper(log)
             return
 
         if currency not in CRYPTO_WALLET_CREATORS or currency in ALL_TOKEN_CURRENCIES:

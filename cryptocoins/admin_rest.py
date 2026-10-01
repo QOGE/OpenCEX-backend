@@ -8,6 +8,7 @@ from core.models import UserWallet
 from core.utils.withdrawal import get_withdrawal_requests_to_process
 from cryptocoins.coins.bnb import BNB_CURRENCY
 from cryptocoins.coins.btc.service import BTCCoinService
+from cryptocoins.coins.qoge.service import QOGECoinService
 from cryptocoins.coins.eth import ETH_CURRENCY
 from cryptocoins.coins.matic import MATIC_CURRENCY
 from cryptocoins.coins.trx import TRX_CURRENCY
@@ -15,10 +16,12 @@ from cryptocoins.models import ScoringSettings
 from cryptocoins.models import TransactionInputScore
 from cryptocoins.models.proxy import BNBWithdrawalApprove, MaticWithdrawalApprove
 from cryptocoins.models.proxy import BTCWithdrawalApprove
+from cryptocoins.models.proxy import QOGEWithdrawalApprove
 from cryptocoins.models.proxy import ETHWithdrawalApprove
 from cryptocoins.models.proxy import TRXWithdrawalApprove
 from cryptocoins.serializers import BNBKeySerializer
 from cryptocoins.serializers import BTCKeySerializer
+from cryptocoins.serializers import QOGEKeySerializer
 from cryptocoins.serializers import ETHKeySerializer
 from cryptocoins.serializers import TRXKeySerializer
 from cryptocoins.serializers import MaticKeySerializer
@@ -52,6 +55,25 @@ class BTCWithdrawalApproveApiAdmin(BaseWithdrawalApprove):
         service = BTCCoinService()
         # form = MySerializer(request)
         serializer = BTCKeySerializer(data=request.data)
+
+        if serializer.is_valid(raise_exception=True):
+            private_key = request.data.get('key')
+            service.process_withdrawals(private_key=private_key)
+
+    process.short_description = 'Process withdrawals'
+
+
+@api_admin.register(QOGEWithdrawalApprove)
+class QOGEWithdrawalApproveApiAdmin(BaseWithdrawalApprove):
+
+    def get_queryset(self):
+        service = QOGECoinService()
+        return service.get_withdrawal_requests()
+
+    @api_admin.action(permissions=True)
+    def process(self, request, queryset):
+        service = QOGECoinService()
+        serializer = QOGEKeySerializer(data=request.data)
 
         if serializer.is_valid(raise_exception=True):
             private_key = request.data.get('key')
