@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 User = get_user_model()
 
 QOGE_USDT_ID = 13
+USDT_QOGE_ID = 14
 
 
 class Command(BaseCommand):
@@ -88,9 +89,25 @@ class Command(BaseCommand):
                 'is_enabled': True,
                 'is_autoorders_enabled': True,
                 'price_source': PairSettings.PRICE_SOURCE_CUSTOM,
-                'custom_price': 0,
+                'custom_price': 0.0005,
                 'deviation': 0.99000000,
                 'precisions': ['100', '10', '1', '0.1', '0.01'],
+            },
+        )
+
+        usdt_qoge, _ = Pair.objects.get_or_create(
+            id=USDT_QOGE_ID,
+            defaults={'base': 'USDT', 'quote': 'QOGE'},
+        )
+        PairSettings.objects.update_or_create(
+            pair=usdt_qoge,
+            defaults={
+                'is_enabled': True,
+                'is_autoorders_enabled': False,
+                'price_source': PairSettings.PRICE_SOURCE_CUSTOM,
+                'custom_price': 2000,
+                'deviation': 0.99000000,
+                'precisions': ['1000', '100', '10', '1', '0.1'],
             },
         )
 
@@ -155,5 +172,5 @@ class Command(BaseCommand):
         except Exception:
             pass
 
-        self.stdout.write(self.style.SUCCESS('QOGE coin and QOGE-USDT pair are registered'))
-        self.stdout.write('BTC is disabled. QOGE-USDT needs PairSettings.custom_price (no Binance ticker).')
+        self.stdout.write(self.style.SUCCESS('QOGE coin, QOGE-USDT, and USDT-QOGE pairs are registered'))
+        self.stdout.write('BTC is disabled. Custom prices: QOGE-USDT 0.0005, USDT-QOGE 2000.')

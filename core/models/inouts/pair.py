@@ -14,6 +14,7 @@ PAIRS_LIST = [
     (TRX_USDT, 'TRX-USDT'),
     (BNB_USDT, 'BNB-USDT'),
     (QOGE_USDT, 'QOGE-USDT'),
+    (USDT_QOGE, 'USDT-QOGE'),
 ]
 
 class PairNotFound(CurrencyNotFound):

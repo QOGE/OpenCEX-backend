@@ -723,7 +723,7 @@ def main():
                     'is_enabled': True,
                     'is_autoorders_enabled': True,
                     'price_source': PairSettings.PRICE_SOURCE_CUSTOM,
-                    'custom_price': 0,
+                    'custom_price': 0.0005,
                     'deviation': 0.99000000,
                     'precisions': ['100', '10', '1', '0.1', '0.01']
                 },
@@ -744,6 +744,16 @@ def main():
                     'low_orders_min_order_size': 0.0003,
                     'enabled': True,
                 }
+            },
+            Pair.get('USDT-QOGE'): {
+                PairSettings: {
+                    'is_enabled': True,
+                    'is_autoorders_enabled': False,
+                    'price_source': PairSettings.PRICE_SOURCE_CUSTOM,
+                    'custom_price': 2000,
+                    'deviation': 0.99000000,
+                    'precisions': ['1000', '100', '10', '1', '0.1'],
+                },
             },
             Pair.get('MATIC-USDT'): {
                 PairSettings: {
