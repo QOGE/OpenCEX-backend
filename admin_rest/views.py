@@ -7,12 +7,17 @@ from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User, Group
 from django.core.files.storage import DefaultStorage
 from django.http import JsonResponse
-from django_otp import match_token
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
 from admin_rest import restful_admin as api_admin
+from admin_rest.otp import (
+    device_base32_secret,
+    get_or_create_admin_device,
+    provisioning_uri,
+    verify_totp,
+)
 from admin_rest.serializers import UserDetailsSerializer
 from admin_rest.utils import is_valid_image, get_media_url, get_upload_filename, get_image_files
 
@@ -24,12 +29,31 @@ from rest_framework_simplejwt.tokens import RefreshToken
 DEVICE_ID_SESSION_KEY = 'otp_device_id'
 
 
+def _login_success(request, user, device=None):
+    if device is not None:
+        request.session[DEVICE_ID_SESSION_KEY] = device.persistent_id
+        request.user.otp_device = device
+    refresh = RefreshToken.for_user(user)
+    access_token = str(refresh.access_token)
+    refresh_token = str(refresh)
+    response = JsonResponse(
+        {'status': True, 'access_token': access_token, 'refresh_token': refresh_token},
+        safe=False,
+        status=status.HTTP_200_OK,
+    )
+    response.set_cookie(
+        settings.JWT_AUTH_COOKIE,
+        access_token,
+        settings.JWT_EXPIRATION_DELTA.total_seconds(),
+        httponly=True,
+    )
+    return response
+
+
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
 def login(request):
-    """Authenticate user.
-    Returns access token.
-    """
+    """Authenticate staff. First login enrolls Google Authenticator; later logins need the 6-digit code."""
     error = {'status': False, 'error': 'Incorrect username or password'}
     error_response = JsonResponse(error, safe=False, status=status.HTTP_400_BAD_REQUEST)
 
@@ -52,27 +76,52 @@ def login(request):
     if not user.is_superuser and not user.is_staff:
         return error_response
 
-    # check 2FA
-    if settings.ENABLE_OTP_ADMIN:
-        otp_token = request.data.get('otp_token')
-        if otp_token and otp_token.isdigit():
-            otp_token = int(otp_token)
-        device = match_token(user, otp_token)
-        if not device:
-            error['error'] = 'Incorrect 2FA token'
-            return JsonResponse(error, safe=False, status=status.HTTP_400_BAD_REQUEST)
+    if not settings.ENABLE_OTP_ADMIN:
+        return _login_success(request, user)
 
-        request.session[DEVICE_ID_SESSION_KEY] = device.persistent_id
-        request.user.otp_device = device
+    otp_token = (request.data.get('otp_token') or '').strip()
+    device = get_or_create_admin_device(user)
+    secret = device_base32_secret(device)
+    otpauth_url = provisioning_uri(user, secret)
 
-    refresh = RefreshToken.for_user(user)
-    access_token = str(refresh.access_token)
-    refresh_token = str(refresh)
+    if not device.confirmed:
+        if not otp_token:
+            return JsonResponse({
+                'status': False,
+                'otp_setup_required': True,
+                'secret': secret,
+                'otpauth_url': otpauth_url,
+            }, safe=False, status=status.HTTP_200_OK)
+        if not verify_totp(secret, otp_token):
+            return JsonResponse({
+                'status': False,
+                'error': 'Incorrect 2FA token',
+                'otp_setup_required': True,
+                'secret': secret,
+                'otpauth_url': otpauth_url,
+            }, safe=False, status=status.HTTP_400_BAD_REQUEST)
+        device.confirmed = True
+        device.throttling_failure_count = 0
+        device.throttling_failure_timestamp = None
+        device.save(update_fields=[
+            'confirmed', 'throttling_failure_count', 'throttling_failure_timestamp',
+        ])
+        return _login_success(request, user, device)
 
-    response = JsonResponse({'status': True, 'access_token': access_token, 'refresh_token': refresh_token}, safe=False, status=status.HTTP_200_OK)
-    response.set_cookie(settings.JWT_AUTH_COOKIE, access_token, settings.JWT_EXPIRATION_DELTA.total_seconds(), httponly=True)
+    if not otp_token:
+        return JsonResponse({
+            'status': False,
+            'otp_required': True,
+            'error': '2FA code required',
+        }, safe=False, status=status.HTTP_200_OK)
+    if not verify_totp(secret, otp_token):
+        return JsonResponse({
+            'status': False,
+            'error': 'Incorrect 2FA token',
+            'otp_required': True,
+        }, safe=False, status=status.HTTP_400_BAD_REQUEST)
 
-    return response
+    return _login_success(request, user, device)
 
 
 @api_view(['POST', 'PUT'])

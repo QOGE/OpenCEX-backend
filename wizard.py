@@ -822,10 +822,17 @@ def main():
         totp, is_new_totp = TOTPDevice.objects.get_or_create(
             user=user,
             defaults={
-                'name': user.email,
+                'name': user.username or user.email or 'admin',
+                'confirmed': False,
             }
         )
-        to_write.append(f'2fa token: {totp.config_url}')
+        if totp.confirmed:
+            totp.confirmed = False
+            totp.save(update_fields=['confirmed'])
+        to_write.append(
+            'Admin 2FA: after the first password login, scan the on-screen QR '
+            'with Google Authenticator and enter the 6-digit code.'
+        )
         to_write.append('='*10)
 
         site, site_is_new = Site.objects.get_or_create(

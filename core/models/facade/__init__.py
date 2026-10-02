@@ -275,13 +275,10 @@ class TwoFactorSecretTokens(BaseModel):
 
     @classmethod
     def check_totp(cls, totp, code) -> bool:
-        """
-        Check if code valid for current or previous time window
-        """
-        current_otp = totp.now()
-        previous_otp = totp.at(now(), counter_offset=-1)
-
-        return code in [current_otp, previous_otp]
+        """Google Authenticator TOTP: current period ±1 (30s)."""
+        if code is None:
+            return False
+        return bool(totp.verify(str(code).strip(), valid_window=1))
 
     @classmethod
     def generate_secret(cls):
