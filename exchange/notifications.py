@@ -319,7 +319,7 @@ class TradesNotificator(BasePaginatedNotificator):
 
 class OpenedOrdersNotificator(BasePaginatedNotificator):
     MSG_KIND = 'opened_orders'
-    LIMIT = 7
+    LIMIT = 25
     SERIALIZER = OrderSerializer
     PARAMS = ['user_id']
 
@@ -392,7 +392,8 @@ class ClosedOrdersByPairNotificator(ClosedOrdersNotificator):
 
 class OpenedOrdersEndpoint(BaseNotificator):
     MSG_KIND = 'opened_orders'
-    LIMIT = 7
+    LIMIT = 25
+    MAX_LIMIT = 50
     SERIALIZER = OrderSerializer
     PARAMS = ['user_id', 'date_from', 'date_to', 'page']
 
@@ -414,23 +415,31 @@ class OpenedOrdersEndpoint(BaseNotificator):
         params['state'] = Order.STATE_OPENED
         return params
 
+    def _page_limit(self, **kwargs):
+        try:
+            limit = int(kwargs.get('limit') or self.LIMIT)
+        except (TypeError, ValueError):
+            limit = self.LIMIT
+        return max(1, min(limit, self.MAX_LIMIT))
+
     def get_data(self, **kwargs):
         queryset = self.get_queryset(**kwargs)
 
         page = int(kwargs.get('page') or 1)
         if page < 1:
             page = 1
-        offset = (page - 1) * self.LIMIT
+        limit = self._page_limit(**kwargs)
+        offset = (page - 1) * limit
 
         total_entries = queryset.count()
-        total_pages, mod = divmod(total_entries, self.LIMIT)
+        total_pages, mod = divmod(total_entries, limit)
 
         if mod:
             total_pages += 1
         data = {
             'total_pages': total_pages,
             'page': page,
-            'results': self.SERIALIZER(queryset[offset: offset + self.LIMIT], many=True).data
+            'results': self.SERIALIZER(queryset[offset: offset + limit], many=True).data
         }
         return data
 
