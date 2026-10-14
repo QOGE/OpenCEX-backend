@@ -147,9 +147,8 @@ class Command(BaseCommand):
             if Keeper.objects.filter(currency=QOGE_CURRENCY).exists():
                 self.stdout.write('QOGE keeper already exists')
             else:
-                info, keeper = generate_qoge_multisig_keeper(log)
+                _, keeper = generate_qoge_multisig_keeper(log)
                 self.stdout.write('QOGE keeper {}'.format(keeper.user_wallet.address))
-                self.stdout.write(str(info))
 
         DisabledCoin.objects.update_or_create(
             currency=BTC,

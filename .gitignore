@@ -31,4 +31,6 @@ static/*
 maintenance_mode_state.txt
 docker-compose.yml
 .env
+.handoff/
+save_to_self_and_delete*.txt
 !.gitkeep

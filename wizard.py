@@ -1,6 +1,4 @@
-import json
 import os
-from datetime import datetime
 
 from core.enums.profile import UserTypeEnum
 
@@ -44,6 +42,7 @@ from cryptocoins.coins.matic import MATIC
 
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
 from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
+from cryptocoins.utils.keeper_handoff import write_secret_handoff
 
 from exchange.settings import env
 from bots.models import BotConfig
@@ -596,8 +595,14 @@ def main():
             bot.profile.user_type = UserTypeEnum.bot.value
             bot.profile.save()
 
-        to_write.append(f'Email: {name}  Password: {settings.BOT_PASSWORD}')
+        to_write.append(f'Email: {name}')
         to_write.append('='*10)
+        secrets_payload = {
+            'bot': {
+                'email': name,
+                'password': settings.BOT_PASSWORD,
+            },
+        }
 
         pairs = PAIRS_LIST + [
             (12, 'MATIC-USDT')
@@ -815,9 +820,11 @@ def main():
         Profile.objects.filter(user=user).update(is_auto_orders_enabled=True)
 
         to_write.append('Admin Info:')
-        to_write.append(f'Email: {name}  Password: {password}')
-        to_write.append(f'Master Pass: {settings.ADMIN_MASTERPASS}')
-        print(f"password: {password}")
+        to_write.append(f'Email: {name}')
+        secrets_payload['admin'] = {
+            'email': name,
+            'password': password,
+        }
 
         totp, is_new_totp = TOTPDevice.objects.get_or_create(
             user=user,
@@ -859,12 +866,10 @@ def main():
                 btc_info, btc_keeper = generate_btc_multisig_keeper()
                 to_write.append('BTC Info')
                 to_write.append(f'Keeper address: {btc_keeper.user_wallet.address}')
-                to_write.append('private data:')
-                to_write.append(json.dumps(btc_info, indent=4))
                 to_write.append('='*10)
             else:
                 to_write.append('BTC Info')
-                to_write.append('Keeper exists, see previous file')
+                to_write.append('Keeper already exists')
                 to_write.append('='*10)
         else:
             to_write.append('BTC disabled (COMMON_TASKS_BTC=False)')
@@ -885,8 +890,6 @@ def main():
                 qoge_info, qoge_keeper = generate_qoge_multisig_keeper()
                 to_write.append('QOGE Info')
                 to_write.append(f'Keeper address: {qoge_keeper.user_wallet.address}')
-                to_write.append('private data:')
-                to_write.append(json.dumps(qoge_info, indent=4))
                 to_write.append('='*10)
             except Exception as exc:
                 to_write.append('QOGE Info')
@@ -895,7 +898,7 @@ def main():
                 to_write.append('='*10)
         else:
             to_write.append('QOGE Info')
-            to_write.append('Keeper exists, see previous file')
+            to_write.append('Keeper already exists')
             to_write.append('='*10)
 
         for currency_id in coin_list:
@@ -907,23 +910,26 @@ def main():
                 k_password, keeper = keeper_create(currency)
                 gas_password, gas_keeper = keeper_create(currency, True)
                 to_write.append(f'{currency.code} Info')
-                to_write.append(f'Keeper address: {keeper.user_wallet.address}, Password: {k_password}')
-                to_write.append(f'GasKeeper address: {gas_keeper.user_wallet.address}, Password: {gas_password}')
+                to_write.append(f'Keeper address: {keeper.user_wallet.address}')
+                to_write.append(f'GasKeeper address: {gas_keeper.user_wallet.address}')
                 to_write.append('='*10)
+                secrets_payload.setdefault('evm_keepers', {})[currency.code] = {
+                    'keeper_address': keeper.user_wallet.address,
+                    'keeper_password': k_password,
+                    'gas_keeper_address': gas_keeper.user_wallet.address,
+                    'gas_keeper_password': gas_password,
+                }
             else:
                 to_write.append(f'{currency.code} Info')
-                to_write.append('Keeper and GasKeeper exists, see previous file')
+                to_write.append('Keeper and GasKeeper already exist')
                 to_write.append('=' * 10)
 
-        filename = f'save_to_self_and_delete_{int(datetime.now().timestamp())}.txt'
-        filename_path = os.path.join(settings.BASE_DIR, filename)
-        with open(filename_path, 'a+') as file:
-            for line in to_write:
-                file.write(line + '\r\n')
-
+        handoff_path = write_secret_handoff(secrets_payload, prefix='wizard-credentials')
+        for line in to_write:
+            print(line)
         print(
-            f'the file {filename} was created, it contains private information, '
-            f'please save the file to yourself and delete it from the server'
+            'Secret handoff written to {} (mode 600). '
+            'Copy it off this host and delete it.'.format(handoff_path)
         )
 
 

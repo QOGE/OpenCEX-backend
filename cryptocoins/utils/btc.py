@@ -1,4 +1,3 @@
-import json
 from collections import OrderedDict
 from typing import Tuple, Any
 
@@ -9,6 +8,7 @@ from core.models import UserWallet
 from cryptocoins.coins.btc import BTC_CURRENCY
 from cryptocoins.models import Keeper
 from cryptocoins.utils.commons import create_keeper
+from cryptocoins.utils.keeper_handoff import public_keeper_record, write_secret_handoff
 from lib.cipher import AESCoderDecoder
 from lib.helpers import to_decimal
 from hashlib import sha256, new
@@ -105,8 +105,26 @@ def generate_btc_multisig_keeper(log=None) -> Tuple[OrderedDict, Keeper]:
         'SITE': site,
         'KEEPER': keeper_data
     })
-
-    print(json.dumps(res, indent=4))
+    handoff_path = write_secret_handoff(
+        {
+            'OWNER': {
+                'address': ad1.address,
+                'public key': ad1.public_key,
+                'private key': ad1.private_key,
+            },
+            'MANAGER': {
+                'address': ad2.address,
+                'public key': ad2.public_key,
+                'private key': ad2.private_key,
+            },
+            'KEEPER': {
+                'address': address,
+            },
+        },
+        prefix='btc-keeper',
+    )
+    if log:
+        log.info('BTC keeper %s; secret handoff %s (mode 600)', address, handoff_path)
 
     service.rpc.addmultisigaddress(2, pub_keys, "keeper", "p2sh-segwit" if is_segwit else "legacy")
     service.rpc.importaddress(address, "keeper", False)
@@ -123,4 +141,4 @@ def generate_btc_multisig_keeper(log=None) -> Tuple[OrderedDict, Keeper]:
 
     keeper: Keeper = create_keeper(user_wallet, extra={'redeem_script': script})
 
-    return res, keeper
+    return public_keeper_record(res), keeper

@@ -27,17 +27,18 @@ class Command(BaseCommand):
         parser.add_argument('-g', '--gas', dest='gas', action='store_true', help='Is gas keeper')
 
     def handle(self, *args, **options):
-        log.info(options)
         password = options.get('password')
         currency = Currency.get(options.get('currency'))
         is_gas_keeper = options.get('gas')
 
         if currency == BTC_CURRENCY:
-            generate_btc_multisig_keeper(log)
+            _, keeper = generate_btc_multisig_keeper(log)
+            self.stdout.write('BTC keeper {}'.format(keeper.user_wallet.address))
             return
 
         if currency == QOGE_CURRENCY:
-            generate_qoge_multisig_keeper(log)
+            _, keeper = generate_qoge_multisig_keeper(log)
+            self.stdout.write('QOGE keeper {}'.format(keeper.user_wallet.address))
             return
 
         if currency not in CRYPTO_WALLET_CREATORS or currency in ALL_TOKEN_CURRENCIES:
@@ -57,7 +58,6 @@ class Command(BaseCommand):
             raise Exception('Password required for Keeper generation')
 
         if password:
-            log.info(f'Ecrypt using secret: {password}')
             private_key = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(new_keeper_wallet.private_key)
             encrypted_key = AESCoderDecoder(password).encrypt(private_key)
             dbl_encrypted_key = AESCoderDecoder(settings.CRYPTO_KEY).encrypt(encrypted_key)
