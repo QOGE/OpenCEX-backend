@@ -52,6 +52,18 @@ def _login_success(request, user, device=None):
 
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
+def token_obtain_disabled(request):
+    """Stock SimpleJWT issue-token is disabled: it skipped staff, OTP, captcha and email checks."""
+    return JsonResponse(
+        {
+            'detail': 'Password-only token issuance is disabled. Use POST /apiadmin/login/.',
+        },
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+@api_view(['POST'])
+@permission_classes((AllowAny, ))
 def login(request):
     """Authenticate staff. First login enrolls Google Authenticator; later logins need the 6-digit code."""
     error = {'status': False, 'error': 'Incorrect username or password'}
