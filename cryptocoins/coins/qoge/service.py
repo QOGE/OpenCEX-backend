@@ -234,7 +234,7 @@ class QOGECoinService(BitCoreCoinServiceBase):
             tx_obj = apply_multisignatures(tx_obj, i, redeem_script, sig1, sig3, segwit=segwit)
         return serialize(tx_obj)
 
-    def check_tx_for_deposit(self, tx_data):
+    def check_tx_for_deposit(self, tx_data, block_id=None, block_hash=None):
         tx_id = tx_data['txid']
         outputs_amount = defaultdict(Decimal)
 
@@ -277,13 +277,15 @@ class QOGECoinService(BitCoreCoinServiceBase):
             if ScoreManager.need_to_check_score(tx_id, addr, amount, self.currency.code):
                 defer_time = ScoringSettings.get_deffered_scoring_time(self.currency.code)
                 process_deffered_deposit.apply_async(
-                    (tx_id, addr, amount, self.currency.code),
+                    (tx_id, addr, amount, self.currency.code, block_id, block_hash),
                     queue='qoge',
                     countdown=defer_time,
                 )
             else:
                 self.log.info('Tx amount too low for scoring')
-                self.process_deposit(tx_id, addr, amount)
+                self.process_deposit(
+                    tx_id, addr, amount, block_id=block_id, block_hash=block_hash,
+                )
 
     def accumulate_deposit(self, wallet_transaction, inputs_dict, private_keys_dict):
         item = inputs_dict.get(wallet_transaction.tx_hash)

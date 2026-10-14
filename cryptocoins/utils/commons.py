@@ -15,23 +15,34 @@ from lib.cipher import AESCoderDecoder
 log = logging.getLogger(__name__)
 
 
-def store_last_processed_block_id(currency: Currency, block_id: int):
+def store_last_processed_block_id(currency: Currency, block_id: int, block_hash: str = None, allow_rewind: bool = False):
     last_processed_block_instance, _ = LastProcessedBlock.objects.get_or_create(
         currency=currency,
         defaults={
             'currency': currency,
+            'block_id': block_id,
+            'block_hash': block_hash or None,
         }
     )
-    if last_processed_block_instance.block_id >= block_id:
+    if not allow_rewind and last_processed_block_instance.block_id >= block_id:
+        if block_hash and not last_processed_block_instance.block_hash:
+            last_processed_block_instance.block_hash = block_hash
+            last_processed_block_instance.save(update_fields=['block_hash', 'updated'])
         return
     last_processed_block_instance.block_id = block_id
+    if block_hash is not None:
+        last_processed_block_instance.block_hash = block_hash or None
     last_processed_block_instance.save()
 
 
-def load_last_processed_block_id(currency: Currency, default: int = 0) -> int:
-    last_processed_block_instance = LastProcessedBlock.objects.filter(
+def load_last_processed_block(currency: Currency):
+    return LastProcessedBlock.objects.filter(
         currency=currency,
     ).first()
+
+
+def load_last_processed_block_id(currency: Currency, default: int = 0) -> int:
+    last_processed_block_instance = load_last_processed_block(currency)
 
     if last_processed_block_instance is None:
         log.warning('Last processed block ID not found for %s, return default (%s)', currency, default)

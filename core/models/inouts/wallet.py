@@ -27,10 +27,12 @@ logger = logging.getLogger('wallet')
 
 class WalletTransactions(BaseModel):
     STATUS_NOT_SET = 0
+    STATUS_ORPHAN_QUARANTINE = 98
     STATUS_REVERTED = 99
 
     STATUS_LIST = (
         (STATUS_NOT_SET, _('Not set')),
+        (STATUS_ORPHAN_QUARANTINE, _('Orphan quarantine')),
         (STATUS_REVERTED, _('Reverted')),
     )
 
@@ -99,6 +101,8 @@ class WalletTransactions(BaseModel):
     fee_amount = MoneyField(default=0)
     wallet = models.ForeignKey('core.UserWallet', on_delete=models.CASCADE, related_name='wallet_transaction')
     tx_hash = models.CharField(max_length=250)
+    block_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    block_hash = models.CharField(max_length=80, null=True, blank=True)
     transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='wallet_transaction', null=True)
     status = models.PositiveSmallIntegerField(default=STATUS_NOT_SET, choices=STATUS_LIST)
     monitoring_state = models.PositiveSmallIntegerField(default=MONITORING_STATE_NOT_CHECKED, choices=MONITORING_STATES)
@@ -126,7 +130,8 @@ class WalletTransactions(BaseModel):
             self.__check_deposit()
 
     @classmethod
-    def get_or_create_for_chain_tx(cls, *, tx_hash, currency, amount, wallet=None, wallet_id=None):
+    def get_or_create_for_chain_tx(cls, *, tx_hash, currency, amount, wallet=None, wallet_id=None,
+                                   block_id=None, block_hash=None):
         """
         Insert one deposit for a chain event. Returns (row, created).
         """
@@ -138,13 +143,23 @@ class WalletTransactions(BaseModel):
             lookup['wallet_id'] = wallet_id
         else:
             raise ValueError('wallet or wallet_id is required')
+        defaults = {'currency': currency, 'amount': amount}
+        if block_id is not None:
+            defaults['block_id'] = block_id
+        if block_hash:
+            defaults['block_hash'] = block_hash
         try:
-            return cls.objects.get_or_create(
+            row, created = cls.objects.get_or_create(
                 **lookup,
-                defaults={'currency': currency, 'amount': amount},
+                defaults=defaults,
             )
         except IntegrityError:
             return cls.objects.get(**lookup), False
+        if not created and block_id is not None and row.block_id is None:
+            row.block_id = block_id
+            row.block_hash = block_hash
+            super(WalletTransactions, row).save(update_fields=['block_id', 'block_hash', 'updated'])
+        return row, created
 
     def __check_deposit(self):
         deposit_min_limit = FeesAndLimits.get_limit(self.currency.code, FeesAndLimits.DEPOSIT,
@@ -233,6 +248,9 @@ class WalletTransactions(BaseModel):
             if locked is None:
                 return self
 
+            if locked.status in (self.STATUS_REVERTED, self.STATUS_ORPHAN_QUARANTINE):
+                return self
+
             tx = locked.transaction
             if not tx:
                 # delete this later. Tx created at first save
@@ -293,6 +311,41 @@ class WalletTransactions(BaseModel):
             raise ValidationError(f'the topup {self.id} has already been reverted!')
 
         self._revert()
+
+    def mark_orphaned(self):
+        """
+        Drop or reverse a deposit whose chain transaction is no longer canonical.
+        Pending credits are canceled without a balance change. Spendable credits
+        are reverted; if the balance was already spent the row is quarantined.
+        """
+        from core.models.inouts.transaction import TRANSACTION_CANCELED
+        from core.models.inouts.transaction import TRANSACTION_PENDING
+        from core.models.wallet_history import WalletHistoryItem
+
+        if self.status in (self.STATUS_REVERTED, self.STATUS_ORPHAN_QUARANTINE):
+            return 'already'
+
+        tx = self.transaction
+        if tx is not None and tx.state == TRANSACTION_PENDING:
+            type(tx).objects.filter(pk=tx.pk, state=TRANSACTION_PENDING).update(
+                state=TRANSACTION_CANCELED,
+            )
+            WalletHistoryItem.objects.filter(transaction=tx).update(
+                state=WalletHistoryItem.STATE_CANCELED,
+            )
+            self.status = self.STATUS_REVERTED
+            self.state = self.STATE_VERIFICATION_FAILED
+            super(WalletTransactions, self).save(update_fields=['status', 'state', 'updated'])
+            return 'pending-dropped'
+
+        try:
+            self.revert()
+            return 'reverted'
+        except (NotEnoughFunds, ValidationError):
+            self.status = self.STATUS_ORPHAN_QUARANTINE
+            self.state = self.STATE_VERIFICATION_FAILED
+            super(WalletTransactions, self).save(update_fields=['status', 'state', 'updated'])
+            return 'quarantined'
 
     def set_ready_for_accumulation(self):
         if self.state == self.STATE_READY_FOR_ACCUMULATION:

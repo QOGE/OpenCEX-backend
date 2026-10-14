@@ -80,13 +80,55 @@ class CoinServiceBase:
         """
         raise NotImplementedError
 
+    def get_block_hash(self, block_id):
+        """
+        canonical block hash at height
+        """
+        raise NotImplementedError
+
+    def get_block_header(self, block_hash):
+        """
+        block header by hash (confirmations, height, previousblockhash)
+        """
+        raise NotImplementedError
+
+    def get_tx_confirmations(self, tx_hash):
+        """
+        confirmation count for a transaction, or None if this chain cannot check
+        """
+        return None
+
+    @property
+    def required_confirmations(self) -> int:
+        mapping = getattr(settings, 'CRYPTO_TOPUP_REQUIRED_CONFIRMATIONS', None) or {}
+        try:
+            value = mapping[self.currency.code]
+        except (KeyError, TypeError, AttributeError):
+            value = getattr(settings, 'CRYPTO_TOPUP_REQUIRED_CONFIRMATIONS_COUNT', 6)
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = 6
+        return max(1, value)
+
+    @property
+    def reorg_max_rewind(self) -> int:
+        try:
+            value = int(getattr(settings, 'CRYPTO_REORG_MAX_REWIND', 1000) or 1000)
+        except (TypeError, ValueError):
+            value = 1000
+        return max(self.required_confirmations, value)
+
+    def confirmed_scan_height(self, tip: int) -> int:
+        return tip - self.required_confirmations + 1
+
     def get_block_transactions(self, block_id):
         """
         return transaction list by block_id
         """
         raise NotImplementedError
 
-    def check_tx_for_deposit(self, tx_data):
+    def check_tx_for_deposit(self, tx_data, block_id=None, block_hash=None):
         """
         check tx_data for deposit
         """
@@ -194,45 +236,177 @@ class CoinServiceBase:
     def get_external_accumulation_ready_wallet_transactions(self) -> List[WalletTransactions]:
         return WalletTransactions.get_ready_for_external_accumulation(self.currency)
 
-    @transaction.atomic
     def process_new_blocks(self):
         """
-        Process new blocks to check deposits
+        Process blocks that have reached the confirmation depth. Pin the
+        scanner cursor to a canonical hash so a reorg rewinds instead of
+        skipping the fork.
         """
         with memcache_lock(f'{self.currency}_lock') as acquired:
             if acquired:
-                current_block_id = self.get_current_block_id()
-                last_processed_block_id = commons.load_last_processed_block_id(
-                    self.currency,
-                    default=current_block_id - self.default_block_id_delta,
-                )
-
-                if current_block_id == last_processed_block_id:
-                    self.log.debug('Nothing to process')
-                    return
-
-                blocks_to_process = list(range(
-                    last_processed_block_id + 1,
-                    current_block_id + 1,
-                ))
-
-                self.log.info('Need to process %s blocks count: %s', self.currency.code, len(blocks_to_process))
-
-                # usually not many blocks
-                for block_id in blocks_to_process:
-                    self.log.info('Processing %s %s block', self.currency.code, block_id)
-                    self.process_block(block_id)
-
-                commons.store_last_processed_block_id(self.currency, current_block_id)
+                self._process_new_blocks_locked()
                 return
         self.log.warning('%s process_new_blocks task already works', self.currency)
+
+    def _process_new_blocks_locked(self):
+        tip = self.get_current_block_id()
+        safe_height = self.confirmed_scan_height(tip)
+        if safe_height < 0:
+            self.log.debug(
+                'Tip %s too low for %s confirmations',
+                tip, self.required_confirmations,
+            )
+            return
+
+        last = commons.load_last_processed_block(self.currency)
+        if last is None:
+            last_id = max(0, safe_height - self.default_block_id_delta)
+            last_hash = None
+        else:
+            last_id = last.block_id
+            last_hash = last.block_hash or None
+
+        if last_id > safe_height:
+            pin_hash = self._block_hash_or_none(safe_height)
+            commons.store_last_processed_block_id(
+                self.currency, safe_height, block_hash=pin_hash, allow_rewind=True,
+            )
+            self.log.info(
+                '%s scanner cursor pinned to confirmed height %s (%s confirmations)',
+                self.currency.code, safe_height, self.required_confirmations,
+            )
+            last_id = safe_height
+            last_hash = pin_hash
+
+        last_id = self._rewind_reorged_cursor(last_id, last_hash)
+
+        if last_id >= safe_height:
+            self.log.debug('Nothing to process')
+            return
+
+        blocks_to_process = list(range(last_id + 1, safe_height + 1))
+        if len(blocks_to_process) > self.default_block_id_delta:
+            blocks_to_process = blocks_to_process[:self.default_block_id_delta]
+
+        self.log.info(
+            'Need to process %s blocks count: %s (tip %s, confirmed height %s)',
+            self.currency.code, len(blocks_to_process), tip, safe_height,
+        )
+
+        for block_id in blocks_to_process:
+            self.log.info('Processing %s %s block', self.currency.code, block_id)
+            self.process_block(block_id)
+            commons.store_last_processed_block_id(
+                self.currency,
+                block_id,
+                block_hash=self._block_hash_or_none(block_id),
+            )
+
+    def _block_hash_or_none(self, block_id):
+        try:
+            return self.get_block_hash(block_id)
+        except NotImplementedError:
+            return None
+        except Exception as exc:
+            self.log.warning(
+                'Unable to read %s hash at %s: %s',
+                self.currency.code, block_id, exc,
+            )
+            return None
+
+    def _rewind_reorged_cursor(self, last_id, last_hash):
+        if not last_hash:
+            pin_hash = self._block_hash_or_none(last_id)
+            if pin_hash:
+                commons.store_last_processed_block_id(
+                    self.currency, last_id, block_hash=pin_hash,
+                )
+            return last_id
+
+        canonical = self._block_hash_or_none(last_id)
+        if canonical and canonical == last_hash:
+            return last_id
+
+        self.log.warning(
+            'Reorg or missing block for %s at height %s (stored %s, chain %s)',
+            self.currency.code, last_id, last_hash, canonical,
+        )
+
+        rewind_to = self._common_ancestor_height(last_id, last_hash)
+        if rewind_to is None:
+            rewind_to = max(0, last_id - self.reorg_max_rewind)
+
+        self._quarantine_orphaned_deposits(after_height=rewind_to)
+        commons.store_last_processed_block_id(
+            self.currency,
+            rewind_to,
+            block_hash=self._block_hash_or_none(rewind_to),
+            allow_rewind=True,
+        )
+        self.log.warning('Rewound %s scanner cursor to %s', self.currency.code, rewind_to)
+        return rewind_to
+
+    def _common_ancestor_height(self, last_id, last_hash):
+        try:
+            header = self.get_block_header(last_hash)
+        except NotImplementedError:
+            return None
+        except Exception as exc:
+            self.log.info('Header lookup failed for %s %s: %s', self.currency.code, last_hash, exc)
+            return None
+
+        confirmations = int(header.get('confirmations') or 0)
+        header_height = int(header.get('height', last_id) or last_id)
+        if confirmations > 0 and header_height == last_id:
+            return last_id
+
+        prev = header.get('previousblockhash')
+        steps = 0
+        while prev and steps < self.reorg_max_rewind:
+            try:
+                header = self.get_block_header(prev)
+            except Exception:
+                break
+            confirmations = int(header.get('confirmations') or 0)
+            height = int(header.get('height') or 0)
+            if confirmations > 0:
+                return height
+            prev = header.get('previousblockhash')
+            steps += 1
+        return None
+
+    def _quarantine_orphaned_deposits(self, after_height):
+        qs = WalletTransactions.objects.filter(
+            currency=self.currency,
+            status=WalletTransactions.STATUS_NOT_SET,
+            block_id__gt=after_height,
+        )
+        for wallet_transaction in qs:
+            confs = self.get_tx_confirmations(wallet_transaction.tx_hash)
+            if confs is None or confs != 0:
+                continue
+            outcome = wallet_transaction.mark_orphaned()
+            self.log.error(
+                'Orphaned %s deposit %s tx %s: %s',
+                self.currency.code,
+                wallet_transaction.id,
+                wallet_transaction.tx_hash,
+                outcome,
+            )
+
+    def deposit_still_confirmed(self, wallet_transaction) -> bool:
+        confs = self.get_tx_confirmations(wallet_transaction.tx_hash)
+        if confs is None or confs < 0:
+            return True
+        return confs >= self.required_confirmations
 
     def process_block(self, block_id):
         """
         Run check_tx_for_deposit for transaction by block_id
         """
+        block_hash = self._block_hash_or_none(block_id)
         for tx_data in self.get_block_transactions(block_id):
-            self.check_tx_for_deposit(tx_data)
+            self.check_tx_for_deposit(tx_data, block_id=block_id, block_hash=block_hash)
 
     def get_withdrawal_requests(self) -> QuerySet:
         """
@@ -259,7 +433,7 @@ class CoinServiceBase:
 
         return result
 
-    def process_deposit(self, tx_hash, address, amount):
+    def process_deposit(self, tx_hash, address, amount, is_scoring_ok=None, block_id=None, block_hash=None):
         self.log.info('Processing deposit %s %s %s %s', self.currency, amount, address, tx_hash)
         wallet = UserWallet.objects.filter(
             currency=self.currency,
@@ -275,6 +449,8 @@ class CoinServiceBase:
             tx_hash=tx_hash,
             currency=self.currency,
             amount=amount,
+            block_id=block_id,
+            block_hash=block_hash,
         )
 
         if not created:
@@ -287,6 +463,35 @@ class CoinServiceBase:
     def check_for_scoring(self):
         waiting_for_scoring = AccumulationManager.get_waiting_for_kyt_check(self.currency.code)
         for wallet_transaction in waiting_for_scoring:
+            confs = self.get_tx_confirmations(wallet_transaction.tx_hash)
+            if confs is None:
+                wallet_transaction.check_scoring()
+                continue
+            if confs < 0:
+                self.log.warning(
+                    'Skip scoring credit for %s deposit %s; confirmations unknown',
+                    self.currency.code, wallet_transaction.id,
+                )
+                continue
+            if confs < self.required_confirmations:
+                if confs == 0:
+                    outcome = wallet_transaction.mark_orphaned()
+                    self.log.error(
+                        'Unconfirmed/orphaned %s deposit %s tx %s: %s',
+                        self.currency.code,
+                        wallet_transaction.id,
+                        wallet_transaction.tx_hash,
+                        outcome,
+                    )
+                else:
+                    self.log.info(
+                        'Skip scoring credit for %s deposit %s; confirmations %s/%s',
+                        self.currency.code,
+                        wallet_transaction.id,
+                        confs,
+                        self.required_confirmations,
+                    )
+                continue
             wallet_transaction.check_scoring()
 
 
@@ -528,7 +733,7 @@ class BitCoreCoinServiceBase(CoinServiceBase):
         block_hash = self.rpc.getblockhash(block_id)
         return self.rpc.getblock(block_hash, 2)['tx']
 
-    def check_tx_for_deposit(self, tx_data):
+    def check_tx_for_deposit(self, tx_data, block_id=None, block_hash=None):
         tx_id = tx_data['txid']
         outputs_amount = defaultdict(Decimal)
 
@@ -541,10 +746,50 @@ class BitCoreCoinServiceBase(CoinServiceBase):
             if addr not in self.get_users_addresses():
                 continue
 
-            self.process_deposit(tx_id, addr, amount)
+            self.process_deposit(
+                tx_id, addr, amount, block_id=block_id, block_hash=block_hash,
+            )
 
     def get_current_block_id(self):
         return self.rpc.getblockcount()
+
+    def get_block_hash(self, block_id):
+        return self.rpc.getblockhash(int(block_id))
+
+    def get_block_header(self, block_hash):
+        return self.rpc.getblockheader(block_hash)
+
+    def get_tx_confirmations(self, tx_hash):
+        try:
+            info = self.rpc.getrawtransaction(tx_hash, True)
+        except Exception as exc:
+            if self._is_missing_tx_error(exc):
+                self.log.info(
+                    'TX %s not in %s chain: %s',
+                    tx_hash, self.currency.code, exc,
+                )
+                return 0
+            self.log.warning(
+                'Unable to query %s tx %s: %s',
+                self.currency.code, tx_hash, exc,
+            )
+            return -1
+        try:
+            return int(info.get('confirmations') or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _is_missing_tx_error(exc) -> bool:
+        error = getattr(exc, 'error', None)
+        if isinstance(error, dict) and error.get('code') == -5:
+            return True
+        message = str(exc).lower()
+        return (
+            'no such mempool' in message
+            or 'no such transaction' in message
+            or 'not found' in message
+        )
 
     def get_last_network_block_id(self):
         """

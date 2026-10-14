@@ -157,7 +157,7 @@ class BTCCoinService(BitCoreCoinServiceBase):
         tx_decode = self.rpc.decoderawtransaction(raw_tx)
         return tx_decode.get('size')
 
-    def check_tx_for_deposit(self, tx_data):
+    def check_tx_for_deposit(self, tx_data, block_id=None, block_hash=None):
         tx_id = tx_data['txid']
         outputs_amount = defaultdict(Decimal)
 
@@ -202,10 +202,16 @@ class BTCCoinService(BitCoreCoinServiceBase):
             # self.process_deposit(tx_id, addr, amount)
             if ScoreManager.need_to_check_score(tx_id, addr, amount, self.currency.code):
                 defer_time = ScoringSettings.get_deffered_scoring_time(self.currency.code)
-                process_deffered_deposit.apply_async((tx_id, addr, amount, self.currency.code), queue='btc', countdown=defer_time)
+                process_deffered_deposit.apply_async(
+                    (tx_id, addr, amount, self.currency.code, block_id, block_hash),
+                    queue='btc',
+                    countdown=defer_time,
+                )
             else:
                 self.log.info('Tx amount too low for scoring')
-                self.process_deposit(tx_id, addr, amount)
+                self.process_deposit(
+                    tx_id, addr, amount, block_id=block_id, block_hash=block_hash,
+                )
 
     def accumulate_deposit(self, wallet_transaction, inputs_dict, private_keys_dict):
         #private_keys = {}

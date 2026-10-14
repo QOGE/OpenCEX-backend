@@ -10,8 +10,15 @@ log = logging.getLogger(__name__)
 
 
 @shared_task
-def process_deffered_deposit(tx_id, address, amount, currency_code):
+def process_deffered_deposit(tx_id, address, amount, currency_code, block_id=None, block_hash=None):
     amount = to_decimal(amount)
     is_scoring_ok = ScoreManager.is_address_scoring_ok(tx_id, address, amount, currency_code)
     service = get_service_instance()
-    service.process_deposit(tx_id, address, amount, is_scoring_ok)
+    service.process_deposit(
+        tx_id,
+        address,
+        amount,
+        is_scoring_ok=is_scoring_ok,
+        block_id=block_id,
+        block_hash=block_hash,
+    )
