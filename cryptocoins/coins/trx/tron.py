@@ -40,9 +40,8 @@ from cryptocoins.tasks.evm import (
     accumulate_coin_task,
     accumulate_tokens_task,
 )
-from cryptocoins.utils.commons import (
-    store_last_processed_block_id,
-)
+from cryptocoins.exceptions import RetryRequired
+from cryptocoins.utils.block_scan import block_hash_from_node_block
 from exchange.settings import env
 from lib.cipher import AESCoderDecoder
 from lib.helpers import to_decimal
@@ -249,17 +248,15 @@ class TronHandler(BaseEVMCoinHandler):
         try:
             block = cls.COIN_MANAGER.get_block(block_id)
         except BlockNotFound:
-            log.warning(f'Block not found: {block_id}')
-            return
-        except Exception as e:
-            store_last_processed_block_id(currency=cls.CURRENCY, block_id=block_id - 1)
-            raise e
+            log.warning('Block not found: %s', block_id)
+            raise RetryRequired('Failed to get {} block {}'.format(cls.CURRENCY.code, block_id))
 
+        block_hash = block_hash_from_node_block(block)
         transactions = block.get('transactions', [])
 
         if not transactions:
             log.info('Block #%s has no transactions, skipping', block_id)
-            return
+            return block_hash
 
         log.info('Transactions count in block #%s: %s', block_id, len(transactions))
 
@@ -372,6 +369,7 @@ class TronHandler(BaseEVMCoinHandler):
         log.info('Block #%s processed in %.2f sec. (TRX TX count: %s, TRC20 TX count: %s, WR TX count: %s)',
                  block_id, execution_time, len(coin_deposit_jobs), len(tokens_deposit_jobs),
                  len(check_tokens_withdrawal_jobs) + len(check_coin_withdrawal_jobs))
+        return block_hash
 
     @classmethod
     def check_tx_withdrawal(cls, withdrawal_id, tx_data):

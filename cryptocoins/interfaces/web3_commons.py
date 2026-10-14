@@ -21,6 +21,7 @@ from cryptocoins.accumulation_manager import AccumulationManager
 from cryptocoins.evm.base import BaseEVMCoinHandler
 from cryptocoins.exceptions import RetryRequired
 from cryptocoins.interfaces.common import BlockchainManager, GasPriceCache, Token, BlockchainTransaction
+from cryptocoins.utils.block_scan import block_hash_from_node_block
 from cryptocoins.models.accumulation_details import AccumulationDetails
 from cryptocoins.models.accumulation_transaction import AccumulationTransaction
 from cryptocoins.tasks.evm import (
@@ -328,16 +329,15 @@ class Web3CommonHandler(BaseEVMCoinHandler):
         block = cls.COIN_MANAGER.get_block(block_id)
 
         if block is None:
-            log.error('Failed to get block #%s, skip...', block_id)
-            # TODO check this
-            # raise self.retry(max_retries=10, countdown=1)
-            return
+            log.error('Failed to get block #%s', block_id)
+            raise RetryRequired('Failed to get {} block {}'.format(cls.CURRENCY.code, block_id))
 
+        block_hash = block_hash_from_node_block(block)
         transactions = block.get('transactions', [])
 
         if len(transactions) == 0:
             log.info('Block #%s has no transactions, skipping', block_id)
-            return
+            return block_hash
 
         transactions = cls._filter_transactions(transactions, block_id=block_id)
         log.info('Transactions count in block #%s: %s', block_id, len(transactions))
@@ -492,6 +492,7 @@ class Web3CommonHandler(BaseEVMCoinHandler):
         log.info('Block #%s processed in %.2f sec. (%s TX count: %s, %s TOKENS TX count: %s, WR TX count: %s)',
                  block_id, execution_time, cls.CURRENCY.code, len(coin_deposit_jobs), cls.CURRENCY.code,
                  len(tokens_deposit_jobs), len(check_tokens_withdrawal_jobs) + len(check_coin_withdrawal_jobs))
+        return block_hash
 
     @classmethod
     def check_tx_withdrawal(cls, withdrawal_id, tx_data):

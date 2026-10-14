@@ -16,7 +16,6 @@ from cryptocoins.coins.bnb.connection import get_w3_connection, check_bnb_respon
 from cryptocoins.evm.manager import register_evm_handler
 from cryptocoins.interfaces.common import GasPriceCache
 from cryptocoins.interfaces.web3_commons import Web3Manager, Web3Token, Web3Transaction, Web3CommonHandler
-from cryptocoins.utils.commons import store_last_processed_block_id
 from exchange.settings import env
 from lib.notifications import send_telegram_message
 
@@ -73,7 +72,6 @@ class BnbManager(Web3Manager):
             response_time = time.time() - started_at
             check_bnb_response_time(w3, response_time)
         except Exception as e:
-            store_last_processed_block_id(currency=BNB_CURRENCY, block_id=block_id)
             self.client.change_provider()
             raise e
         return block
@@ -114,8 +112,6 @@ class BnbHandler(Web3CommonHandler):
         if not valid_txs and count_fail <= 10:
             msg = f'All txs in block {block_id} are zero.\nChange provider from:\n{current_provider}\nto {w3.provider.endpoint_uri}\nCount Fail: {count_fail}'
             send_telegram_message(msg)
-            store_last_processed_block_id(currency=BNB_CURRENCY, block_id=block_id)
-
             w3.change_provider()
             count_fail += 1
             cache.set('bnb_not_valid_block', count_fail)

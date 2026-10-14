@@ -13,6 +13,7 @@ from cryptocoins.tasks.evm import (
     check_balance_task,
     accumulate_tokens_task,
 )
+from cryptocoins.utils.block_scan import next_blocks_to_process
 from cryptocoins.utils.commons import (
     load_last_processed_block_id,
     store_last_processed_block_id,
@@ -72,31 +73,50 @@ class BaseEVMCoinHandler:
         lock_id = f'{cls.CURRENCY.code}_blocks'
         with memcache_lock(lock_id, lock_id) as acquired:
             if acquired:
-                current_block_id = cls.COIN_MANAGER.get_latest_block_num()
-                default_block_id = current_block_id - cls.DEFAULT_BLOCK_ID_DELTA
-                last_processed_block_id = load_last_processed_block_id(
-                    currency=cls.CURRENCY, default=default_block_id)
+                cls._process_new_blocks_locked()
 
-                if last_processed_block_id >= current_block_id:
-                    log.debug('Nothing to process since block #%s', current_block_id)
-                    return
+    @classmethod
+    def _process_new_blocks_locked(cls):
+        current_block_id = cls.COIN_MANAGER.get_latest_block_num()
+        default_block_id = max(0, current_block_id - cls.DEFAULT_BLOCK_ID_DELTA)
+        last_processed_block_id = load_last_processed_block_id(
+            currency=cls.CURRENCY, default=default_block_id)
 
-                blocks_to_process = list(range(
-                    last_processed_block_id + 1,
-                    current_block_id + 1,
-                ))
-                blocks_to_process.insert(0, last_processed_block_id)
-                blocks_to_process = blocks_to_process[:cls.DEFAULT_BLOCK_ID_DELTA]
+        if last_processed_block_id >= current_block_id:
+            log.debug('Nothing to process since block #%s', current_block_id)
+            return
 
-                if len(blocks_to_process) > 1:
-                    log.info('Need to process blocks #%s..#%s', last_processed_block_id + 1, current_block_id)
-                else:
-                    log.info('Need to process block #%s', last_processed_block_id + 1)
+        blocks_to_process = next_blocks_to_process(
+            last_processed_block_id,
+            current_block_id,
+            cls.DEFAULT_BLOCK_ID_DELTA,
+        )
+        if not blocks_to_process:
+            return
 
-                for block_id in blocks_to_process:
-                    cls.process_block(block_id)
+        log.info(
+            'Need to process %s blocks #%s..#%s (tip %s)',
+            cls.CURRENCY.code,
+            blocks_to_process[0],
+            blocks_to_process[-1],
+            current_block_id,
+        )
 
-                store_last_processed_block_id(currency=cls.CURRENCY, block_id=current_block_id)
+        for block_id in blocks_to_process:
+            try:
+                block_hash = cls.process_block(block_id)
+            except Exception:
+                log.exception(
+                    'Failed processing %s block #%s; cursor stays at %s',
+                    cls.CURRENCY.code, block_id, last_processed_block_id,
+                )
+                return
+            last_processed_block_id = block_id
+            store_last_processed_block_id(
+                currency=cls.CURRENCY,
+                block_id=block_id,
+                block_hash=block_hash if isinstance(block_hash, str) else None,
+            )
 
     @classmethod
     def process_coin_deposit(cls, tx_data: dict):
