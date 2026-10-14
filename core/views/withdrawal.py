@@ -7,7 +7,7 @@ from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, OpenApiExample
 from rest_framework import permissions, status, views, viewsets
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotAuthenticated, ValidationError
 from rest_framework.response import Response
 
 from core.exceptions.inouts import WithdrawalAlreadyConfirmed
@@ -20,6 +20,31 @@ from core.serializers.withdrawal import (
 from core.tasks.inouts import send_withdrawal_confirmation_email
 from core.utils import get_rand_code
 from lib.filterbackend import FilterBackend
+
+
+def _unconfirmed_withdrawal(request, confirmation_token=None, withdrawal_request_id=None, require_owner=False):
+    if not confirmation_token and withdrawal_request_id is None:
+        raise ValidationError({
+            "confirmation_token": "Incorrect data.",
+            "withdrawal_request_id": "Incorrect data.",
+        }, code="incorrect_data")
+
+    if withdrawal_request_id is not None or require_owner:
+        if not getattr(request.user, 'is_authenticated', False):
+            raise NotAuthenticated()
+
+    expiration_date = timezone.now() - timezone.timedelta(minutes=settings.WITHDRAWAL_REQUEST_EXPIRATION_M)
+    qs = WithdrawalRequest.objects.filter(
+        created__gt=expiration_date,
+        confirmed=False,
+    )
+    if withdrawal_request_id is not None:
+        qs = qs.filter(pk=withdrawal_request_id, user=request.user)
+    if confirmation_token:
+        qs = qs.filter(confirmation_token__iexact=confirmation_token)
+    if require_owner:
+        qs = qs.filter(user=request.user)
+    return qs.only('id').first()
 
 
 class WithdrawalRequestView(viewsets.ReadOnlyModelViewSet, viewsets.mixins.CreateModelMixin):
@@ -99,28 +124,13 @@ class CancelWithdrawalRequestView(views.APIView):
     def post(self, request):
         serializer = CancelWithdrawalRequestEmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        expiration_date = timezone.now() - timezone.timedelta(minutes=settings.WITHDRAWAL_REQUEST_EXPIRATION_M)
-        filter_data = {
-            'created__gt': expiration_date,
-            'confirmed': False,
-        }
-
-        if 'confirmation_token' not in serializer.data and 'withdrawal_request_id' not in serializer.data:
-            raise ValidationError({
-                "confirmation_token": "Incorrect data.",
-                "withdrawal_request_id": "Incorrect data.",
-            }, code="incorrect_data")
-
-        if 'confirmation_token' in serializer.data:
-            filter_data['confirmation_token'] = serializer.data['confirmation_token']
-
-        if 'withdrawal_request_id' in serializer.data:
-            filter_data['pk'] = serializer.data['withdrawal_request_id']
-
-        withdrawal_request = WithdrawalRequest.objects.filter(
-            **filter_data
-        ).only('id').first()
+        withdrawal_request = _unconfirmed_withdrawal(
+            request,
+            confirmation_token=data.get('confirmation_token'),
+            withdrawal_request_id=data.get('withdrawal_request_id'),
+        )
 
         if withdrawal_request is None:
             return Response(data='Withdrawal request does not exists or expired',
@@ -173,28 +183,14 @@ class ResendWithdrawalRequestConfirmationEmailView(views.APIView):
     def post(self, request):
         serializer = ResendWithdrawalRequestConfirmationEmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        expiration_date = timezone.now() - timezone.timedelta(minutes=settings.WITHDRAWAL_REQUEST_EXPIRATION_M)
-
-        filter_data = {
-            'created__gt': expiration_date
-        }
-
-        if 'confirmation_token' not in serializer.data and 'withdrawal_request_id' not in serializer.data:
-            raise ValidationError({
-                "confirmation_token": "Incorrect data.",
-                "withdrawal_request_id": "Incorrect data.",
-            }, code="incorrect_data")
-
-        if 'confirmation_token' in serializer.data:
-            filter_data['confirmation_token'] = serializer.data['confirmation_token']
-
-        if 'withdrawal_request_id' in serializer.data:
-            filter_data['pk'] = serializer.data['withdrawal_request_id']
-
-        withdrawal_request = WithdrawalRequest.objects.filter(
-            **filter_data,
-        ).only('id').first()
+        withdrawal_request = _unconfirmed_withdrawal(
+            request,
+            confirmation_token=data.get('confirmation_token'),
+            withdrawal_request_id=data.get('withdrawal_request_id'),
+            require_owner=True,
+        )
 
         if withdrawal_request is None:
             return Response(data='Withdrawal request does not exists or expired',
