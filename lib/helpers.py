@@ -106,6 +106,10 @@ def chunked(iterable, n, fill_value=None):
 
 
 def make_hmac_signature_headers(api_key, secret_key):
+    """
+    Outbound order-callback headers. Inbound API auth signs method/path/body
+    instead, so these headers cannot authenticate to the trading API.
+    """
     nonce = str(int(time.time()))
     message = api_key + nonce
     signature = hmac.new(

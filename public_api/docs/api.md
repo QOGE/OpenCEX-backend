@@ -1,23 +1,56 @@
 # Auth
 Each HMAC requests expect the following HTTP Headers:  
 **APIKEY** - Your API Key.  
-**SIGNATURE** - An HMAC-SHA256 hash of the nonce concatenated with API KEY and login of the HTTP request, signed using your API secret.  
-**NONCE** - Timestamp in milliseconds.  
+**SIGNATURE** - HMAC-SHA256 of the canonical request, hex, signed with your API secret.  
+**NONCE** - Timestamp in milliseconds. Each nonce can be used once and must be within 60 seconds of server time.
+
+Canonical message (newline-separated):
+
+```
+METHOD
+PATH
+QUERY
+BODY_SHA256
+APIKEY
+NONCE
+```
+
+`METHOD` is uppercase (`GET`, `POST`, …). `PATH` is the URL path without the query string. `QUERY` is the raw query string with parameters sorted by name. `BODY_SHA256` is the hex SHA-256 of the exact request body (SHA-256 of an empty body for GET). Nonces are single-use per API key.
 
 * **Example**
 ```python
-import requests
-from pprint import pprint
 import hashlib
 import hmac
+import json
 import time
 
+import requests
+
+
+def canonical_query(query):
+    if not query:
+        return ''
+    parts = [p for p in query.split('&') if p]
+    parts.sort(key=lambda p: (p.split('=', 1)[0], p))
+    return '&'.join(parts)
+
+
 def make_request(uri, data=None):
-    url = 'https://example.com/api/public/v1/' + uri
-    nonce = str(int(round(time.time() * 1000)))
+    path = '/api/public/v1/' + uri
+    url = 'https://example.com' + path
+    nonce = str(int(time.time() * 1000))
     api_key = '<YOUR API KEY>'
     secret_key = '<YOUR SECRET KEY>'
-    message = api_key + nonce
+    method = 'POST' if data is not None else 'GET'
+    body = json.dumps(data).encode('utf-8') if data is not None else b''
+    message = '\n'.join([
+        method,
+        path,
+        '',
+        hashlib.sha256(body).hexdigest(),
+        api_key,
+        nonce,
+    ])
     signature = hmac.new(
         secret_key.encode(),
         message.encode('utf-8'),
@@ -26,13 +59,12 @@ def make_request(uri, data=None):
     headers = {
         'APIKEY': api_key,
         'SIGNATURE': signature,
-        'NONCE': nonce
+        'NONCE': nonce,
     }
-    if data:
-        res = requests.post(url, headers=headers, json=data)
-    else:
-        res = requests.get(url, headers=headers)
-    return res
+    if data is not None:
+        headers['Content-Type'] = 'application/json'
+        return requests.post(url, headers=headers, data=body)
+    return requests.get(url, headers=headers)
 ```
 
 # Common reponse status codes

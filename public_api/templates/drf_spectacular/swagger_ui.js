@@ -73,12 +73,42 @@ const injectAuthCredentials = (request) => {
   }
   if (authorized["HMACAuthentication"]) {
     const authDef = authorized["HMACAuthentication"];
+    const apiKey = authDef.value.username;
+    const nonce = Date.now().toString();
+    const method = (request.method || "GET").toUpperCase();
+    let path = "/";
+    let query = "";
+    try {
+      const parsed = new URL(request.url, document.baseURI);
+      path = parsed.pathname;
+      query = parsed.search ? parsed.search.slice(1) : "";
+    } catch (e) {
+      const raw = request.url || "/";
+      const qIndex = raw.indexOf("?");
+      if (qIndex >= 0) {
+        path = raw.slice(0, qIndex);
+        query = raw.slice(qIndex + 1);
+      } else {
+        path = raw;
+      }
+    }
+    query = query.split("&").filter((part) => part !== "").sort((a, b) => {
+      const ka = a.split("=")[0];
+      const kb = b.split("=")[0];
+      if (ka !== kb) {
+        return ka < kb ? -1 : 1;
+      }
+      return a < b ? -1 : a > b ? 1 : 0;
+    }).join("&");
+    let body = "";
+    if (request.body !== undefined && request.body !== null && request.body !== "") {
+      body = typeof request.body === "string" ? request.body : JSON.stringify(request.body);
+    }
+    const bodyHash = CryptoJS.SHA256(body).toString(CryptoJS.enc.Hex);
+    const message = [method, path, query, bodyHash, apiKey, nonce].join("\n");
+    const signature = CryptoJS.HmacSHA256(message, authDef.value.password).toString(CryptoJS.enc.Hex);
 
-    let nonce = Date.now().toString();
-    let message = authDef.value.username + nonce;
-    let signature = CryptoJS.HmacSHA256(message, authDef.value.password).toString(CryptoJS.enc.Hex);
-
-    request.headers['APIKEY'] = authDef.value.username;
+    request.headers['APIKEY'] = apiKey;
     request.headers['SIGNATURE'] = signature;
     request.headers['NONCE'] = nonce;
     return;

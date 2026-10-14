@@ -10,7 +10,7 @@ def is_pair_disabled(pair, disabled_type=None):
 
 
 class HMACAuthenticationScheme(OpenApiAuthenticationExtension):
-    target_class = 'core.auth.api_hmac_auth.HMACAuthentication'  # full import path OR class ref
+    target_class = 'core.auth.hmac_auth.HMACAuthentication'
     name = 'HMACAuthentication'  # name used in the schema
 
     def get_security_definition(self, auto_schema):
