@@ -244,7 +244,7 @@ class CoinServiceBase:
         """
         Get withdrawal requests which keeper has sufficient balance to process
         """
-        if not withdrawal_requests:
+        if withdrawal_requests is None:
             withdrawal_requests = self.get_withdrawal_requests()
         result = []
         total_amount = to_decimal(0)
@@ -474,9 +474,9 @@ class BitCoreCoinServiceBase(CoinServiceBase):
         tx_decode = self.rpc.decoderawtransaction(signed_tx_without_fee['hex'])
         return tx_decode.get('size')
 
-    def transfer(self, inputs: list, outputs: dict, private_keys: list):
+    def sign_transfer(self, inputs: list, outputs: dict, private_keys: list):
         """
-        transfer transaction
+        Sign a transfer without broadcasting. Returns (txid, raw_hex).
         """
         self.log.info('Make transfer %s in -> %s out', len(inputs), len(outputs))
         tx_hex = self.rpc.createrawtransaction(inputs, outputs)
@@ -484,12 +484,19 @@ class BitCoreCoinServiceBase(CoinServiceBase):
 
         if not signed_tx['complete']:
             self.log.error('Unable to sign TX')
+            return None, None
+
+        raw_hex = signed_tx['hex']
+        return self.txid_from_raw(raw_hex), raw_hex
+
+    def transfer(self, inputs: list, outputs: dict, private_keys: list):
+        """
+        transfer transaction
+        """
+        tx_id, raw_hex = self.sign_transfer(inputs, outputs, private_keys)
+        if not tx_id or not raw_hex:
             return
-
-        tx_id = self.rpc.sendrawtransaction(signed_tx['hex'])
-        self.log.info('Sent TX: %s', tx_id)
-
-        return tx_id
+        return self.broadcast_raw_tx(raw_hex)
 
     def transfer_to(self, inputs: list, address: str, amount: Decimal, private_keys: list) -> Tuple[str, Decimal]:
         """
@@ -558,32 +565,63 @@ class BitCoreCoinServiceBase(CoinServiceBase):
 
     def process_withdrawals(self, *args, **kwargs):
         """
-        Process withdrawal requests
+        Process withdrawal requests.
+
+        Claim eligible rows, persist the signed payout, then broadcast so a
+        crash or retry cannot build a second transaction for the same debit.
         """
         self.log.info('Processing %s withdrawals', self.currency.code)
+        lock_id = f'{self.currency}_payouts_lock'
+        with memcache_lock(lock_id, lock_id) as acquired:
+            if not acquired:
+                raise CoinServiceError(
+                    f'{self.currency.code} payout processing already in progress'
+                )
+            self._process_withdrawals_locked(*args, **kwargs)
+
+    def _process_withdrawals_locked(self, *args, **kwargs):
+        unsigned_pending, recovered_count = self._recover_signed_payouts()
+
         keeper_wallet = self.get_keeper_wallet()
         keeper_unspent = self.get_unspent(addresses=[keeper_wallet.address])
         keeper_balance = self.get_balance_from_unspent(keeper_unspent)
         self.log.info('%s keeper balance: %s', self.currency.code, keeper_balance)
 
         selected_withdrawals = kwargs.get('selected_withdrawals')
+        if selected_withdrawals is None:
+            created_or_selected = list(self.get_withdrawal_requests())
+        else:
+            created_or_selected = list(selected_withdrawals)
 
-        sufficient_requests = self.get_sufficient_withdrawal_requests(keeper_balance, selected_withdrawals)
+        seen = {item.id for item in unsigned_pending}
+        candidates = unsigned_pending + [
+            item for item in created_or_selected if item.id not in seen
+        ]
+        sufficient_requests = self.get_sufficient_withdrawal_requests(
+            keeper_balance, candidates
+        )
 
         if not sufficient_requests:
+            if recovered_count:
+                self.log.info(
+                    'Recovered %s %s payout request(s); nothing new to withdraw',
+                    recovered_count, self.currency.code,
+                )
+                return
             self.log.debug('Nothing to withdraw or %s keeper balance too low', self.currency.code)
             raise CoinServiceError(f'Nothing to withdraw or {self.currency.code} keeper balance too low')
 
         self.log.info('Enough balance for requests count: %s', len(sufficient_requests))
 
-        outputs = []
+        sufficient_requests = self._claim_withdrawal_requests(sufficient_requests)
 
+        outputs = []
         for item in sufficient_requests:
             final_amount = item.amount - self.withdrawal_fee
             dest_address = item.data['destination']
             outputs.append(TxOutput(address=dest_address, amount=final_amount))
 
-        tx_id = self.send_from_keeper(
+        tx_id, raw_hex = self.build_keeper_tx(
             outputs,
             *args,
             **kwargs,
@@ -591,21 +629,166 @@ class BitCoreCoinServiceBase(CoinServiceBase):
             keeper_unspent=keeper_unspent,
         )
 
-        if tx_id is None:
+        if not tx_id or not raw_hex:
             self.log.error('Unable to withdraw %s', self.currency.code)
             raise CoinServiceError(f'Unable to withdraw {self.currency.code}')
 
-        for item in sufficient_requests:
-            item.txid = tx_id
-            item.our_fee_amount = self.withdrawal_fee
-            item.save()
+        self._persist_payout_intent(sufficient_requests, tx_id, raw_hex)
+        self.broadcast_raw_tx(raw_hex)
+        self._complete_payout_batch(sufficient_requests, tx_id)
+        self.log.info('Withdrawal completed')
+
+    def _pending_payout_requests(self):
+        return list(
+            WithdrawalRequest.objects.filter(
+                currency=self.currency,
+                state=WithdrawalRequest.STATE_PENDING,
+                approved=True,
+                confirmed=True,
+            ).order_by('created')
+        )
+
+    def _recover_signed_payouts(self):
+        """Rebroadcast persisted payout hex and complete those requests."""
+        unsigned = []
+        groups = defaultdict(list)
+        for item in self._pending_payout_requests():
+            raw_hex = (item.data or {}).get('payout_hex')
+            if raw_hex:
+                groups[raw_hex].append(item)
+            else:
+                unsigned.append(item)
+
+        recovered_count = 0
+        for raw_hex, items in groups.items():
+            tx_id = items[0].txid or self.txid_from_raw(raw_hex)
+            self.broadcast_raw_tx(raw_hex)
+            self._complete_payout_batch(items, tx_id)
+            recovered_count += len(items)
+            self.log.info(
+                'Recovered %s payout %s for %s request(s)',
+                self.currency.code, tx_id, len(items),
+            )
+        return unsigned, recovered_count
+
+    def _claim_withdrawal_requests(self, requests):
+        created_ids = [
+            item.id for item in requests
+            if item.state == WithdrawalRequest.STATE_CREATED
+        ]
+        if not created_ids:
+            return requests
+
+        with transaction.atomic():
+            locked_ids = set(
+                WithdrawalRequest.objects.select_for_update()
+                .filter(
+                    id__in=created_ids,
+                    state=WithdrawalRequest.STATE_CREATED,
+                    approved=True,
+                    confirmed=True,
+                )
+                .values_list('id', flat=True)
+            )
+            if locked_ids != set(created_ids):
+                raise CoinServiceError(
+                    'Withdrawal requests already claimed or no longer eligible'
+                )
+            updated = WithdrawalRequest.objects.filter(
+                id__in=created_ids,
+                state=WithdrawalRequest.STATE_CREATED,
+            ).update(state=WithdrawalRequest.STATE_PENDING)
+            if updated != len(created_ids):
+                raise CoinServiceError(
+                    'Withdrawal requests already claimed or no longer eligible'
+                )
+
+        for item in requests:
+            if item.state == WithdrawalRequest.STATE_CREATED:
+                item.state = WithdrawalRequest.STATE_PENDING
+        return requests
+
+    def _persist_payout_intent(self, requests, tx_id, raw_hex):
+        with transaction.atomic():
+            for item in requests:
+                data = dict(item.data or {})
+                data['payout_hex'] = raw_hex
+                item.data = data
+                item.txid = tx_id
+                item.our_fee_amount = self.withdrawal_fee
+                item.state = WithdrawalRequest.STATE_PENDING
+                item.save(update_fields=[
+                    'data', 'txid', 'our_fee_amount', 'state', 'updated',
+                ])
+
+    def _complete_payout_batch(self, requests, tx_id):
+        for item in requests:
+            if item.txid != tx_id:
+                item.txid = tx_id
+                item.save(update_fields=['txid', 'updated'])
+            if item.state != WithdrawalRequest.STATE_PENDING:
+                item.refresh_from_db()
             item.complete()
 
-        self.log.info('Withdrawal completed')
+    def txid_from_raw(self, raw_hex: str) -> str:
+        decoded = self.rpc.decoderawtransaction(raw_hex)
+        tx_id = decoded.get('txid')
+        if not tx_id:
+            raise CoinServiceError('Unable to decode payout transaction id')
+        return tx_id
+
+    @staticmethod
+    def _is_already_broadcast(exc) -> bool:
+        message = ''
+        error = getattr(exc, 'error', None)
+        if isinstance(error, dict):
+            message = str(error.get('message') or '')
+        if not message:
+            message = str(exc)
+        message = message.lower()
+        return any(token in message for token in (
+            'already in block chain',
+            'already in blockchain',
+            'txn-already-in-mempool',
+            'txn-already-known',
+            'already have',
+        ))
+
+    def _txid_is_known(self, tx_id: str) -> bool:
+        try:
+            raw = self.rpc.getrawtransaction(tx_id)
+            return bool(raw)
+        except Exception:
+            return False
+
+    def broadcast_raw_tx(self, raw_hex: str) -> str:
+        try:
+            tx_id = self.rpc.sendrawtransaction(raw_hex)
+            self.log.info('Sent TX: %s', tx_id)
+            return tx_id
+        except Exception as exc:
+            if self._is_already_broadcast(exc):
+                tx_id = self.txid_from_raw(raw_hex)
+                self.log.info('TX already known: %s', tx_id)
+                return tx_id
+            tx_id = self.txid_from_raw(raw_hex)
+            if self._txid_is_known(tx_id):
+                self.log.info('TX already in node: %s', tx_id)
+                return tx_id
+            raise
 
     def send_from_keeper(self, outputs, *args, **kwargs):
         """
         send transaction from keeper
+        """
+        tx_id, raw_hex = self.build_keeper_tx(outputs, *args, **kwargs)
+        if not tx_id or not raw_hex:
+            return None
+        return self.broadcast_raw_tx(raw_hex)
+
+    def build_keeper_tx(self, outputs, *args, **kwargs):
+        """
+        Sign a keeper payout without broadcasting. Returns (txid, raw_hex).
         """
         keeper_wallet = kwargs.get('keeper_wallet') or self.get_keeper_wallet()
         keeper_unspent = kwargs.get('keeper_unspent') or self.get_unspent(addresses=[keeper_wallet.address])
@@ -645,7 +828,7 @@ class BitCoreCoinServiceBase(CoinServiceBase):
 
         tx_outputs[keeper_wallet.address] = chargeback_amount
 
-        return self.transfer(
+        return self.sign_transfer(
             inputs=keeper_unspent,
             outputs=tx_outputs,
             private_keys=[private_key]

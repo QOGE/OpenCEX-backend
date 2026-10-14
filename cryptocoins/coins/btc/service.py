@@ -40,6 +40,13 @@ class BTCCoinService(BitCoreCoinServiceBase):
         return sat_per_byte_cache.get('bitcoin', settings.SAT_PER_BYTES_MIN_LIMIT)
 
     def send_from_keeper(self, outputs, *args, **kwargs):
+        tx_id, raw_hex = self.build_keeper_tx(outputs, *args, **kwargs)
+        if not tx_id or not raw_hex:
+            return None
+        return self.broadcast_raw_tx(raw_hex)
+
+    def build_keeper_tx(self, outputs, *args, **kwargs):
+        """Sign a BTC keeper payout without broadcasting. Returns (txid, raw_hex)."""
         private_key = kwargs.get('private_key')
         keeper_wallet = kwargs.get('keeper_wallet') or self.get_keeper_wallet()
         keeper_unspent = kwargs.get('keeper_unspent') or self.get_unspent(addresses=[keeper_wallet.address])
@@ -76,7 +83,7 @@ class BTCCoinService(BitCoreCoinServiceBase):
 
         tx_outputs[keeper_wallet.address] = chargeback_amount
 
-        return self.multi_transfer(
+        return self.multi_tx_signed(
             inputs=self.prepare_inputs(keeper_unspent),
             outputs=self.prepare_outs(tx_outputs),
             private_key=keeper_wallet.private_key,
@@ -127,16 +134,20 @@ class BTCCoinService(BitCoreCoinServiceBase):
 
         return serialize(tx_obj)
 
+    def multi_tx_signed(self, inputs: list, outputs: list, private_key: str, private_key_s: str, redeem_script: str):
+        """
+        make transaction and sign with two prv key. Returns (txid, raw_hex).
+        """
+        self.log.info('Make transfer %s in -> %s out', len(inputs), len(outputs))
+        raw_tx = self.multi_tx_sign(inputs, outputs, private_key, private_key_s, redeem_script)
+        return self.txid_from_raw(raw_tx), raw_tx
+
     def multi_transfer(self, inputs: list, outputs: list, private_key: str, private_key_s: str, redeem_script: str):
         """
         make transaction,sign with two prv key and send raw_tx
         """
-        self.log.info('Make transfer %s in -> %s out', len(inputs), len(outputs))
-        raw_tx = self.multi_tx_sign(inputs, outputs, private_key, private_key_s, redeem_script)
-        tx_id = self.rpc.sendrawtransaction(raw_tx)
-        self.log.info('Sent TX: %s', tx_id)
-
-        return tx_id
+        tx_id, raw_tx = self.multi_tx_signed(inputs, outputs, private_key, private_key_s, redeem_script)
+        return self.broadcast_raw_tx(raw_tx)
 
     def get_multi_tx_size(self, inputs: list, outputs: list, private_key: str, private_key_s: str, redeem_script: str):
         """

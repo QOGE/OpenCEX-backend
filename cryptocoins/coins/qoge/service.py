@@ -113,6 +113,13 @@ class QOGECoinService(BitCoreCoinServiceBase):
 
     def send_from_keeper(self, outputs, *args, **kwargs):
         """Build keeper payouts with node RPC so P2QPK destinations encode correctly."""
+        tx_id, raw_hex = self.build_keeper_tx(outputs, *args, **kwargs)
+        if not tx_id or not raw_hex:
+            return None
+        return self.broadcast_raw_tx(raw_hex)
+
+    def build_keeper_tx(self, outputs, *args, **kwargs):
+        """Sign a QOGE keeper payout without broadcasting. Returns (txid, raw_hex)."""
         private_key = kwargs.get('private_key')
         keeper_wallet = kwargs.get('keeper_wallet') or self.get_keeper_wallet()
         keeper_unspent = kwargs.get('keeper_unspent') or self.get_unspent(addresses=[keeper_wallet.address])
@@ -144,7 +151,7 @@ class QOGECoinService(BitCoreCoinServiceBase):
             raise CoinServiceError('Unable to process withdrawals, chargeback after fee less than 0')
 
         tx_outputs[keeper_wallet.address] = chargeback_amount
-        return self._rpc_multi_transfer(
+        return self._rpc_build_signed(
             vin, tx_outputs, keeper_unspent, keeper_wallet.private_key, private_key, keeper_wallet.redeem_script
         )
 
@@ -175,14 +182,19 @@ class QOGECoinService(BitCoreCoinServiceBase):
         decoded = self.rpc.decoderawtransaction(signed['hex'])
         return decoded.get('vsize') or decoded.get('size')
 
-    def _rpc_multi_transfer(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
+    def _rpc_build_signed(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
         signed = self._rpc_sign(vin, tx_outputs, unspent, private_key, private_key_s, redeem_script)
-        if not signed.get('complete'):
+        if not signed.get('complete') or not signed.get('hex'):
             self.log.error('Unable to sign QOGE keeper tx: %s', signed)
             raise CoinServiceError('Unable to sign QOGE keeper tx')
-        tx_id = self.rpc.sendrawtransaction(signed['hex'])
-        self.log.info('Sent TX: %s', tx_id)
-        return tx_id
+        raw_hex = signed['hex']
+        return self.txid_from_raw(raw_hex), raw_hex
+
+    def _rpc_multi_transfer(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
+        tx_id, raw_hex = self._rpc_build_signed(
+            vin, tx_outputs, unspent, private_key, private_key_s, redeem_script
+        )
+        return self.broadcast_raw_tx(raw_hex)
 
     @staticmethod
     def prepare_outs(outs: dict) -> list:

@@ -146,7 +146,7 @@ class WithdrawalRequest(UserMixinModel, BaseModel):
         assert self.state in (CREATED, PENDING)
         assert self.transaction.state == TRANSACTION_PENDING
         with atomic():
-            # self.change_state(COMPLETED)
+            self.change_state(COMPLETED)
             self.transaction.state = TRANSACTION_COMPLETED
             self.transaction.save()
             self.state = COMPLETED
