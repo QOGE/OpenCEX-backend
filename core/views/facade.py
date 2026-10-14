@@ -889,7 +889,44 @@ def check_user_2fa_is_on(request):
 )
 @api_view(['POST'])
 def set_user_2fa(request):
-    TwoFactorSecretTokens.set_code(request.user, request.data['secretcode'])
+    try:
+        already_enabled = TwoFactorSecretTokens.is_enabled_for_user(request.user)
+    except TwoFactorSecretTokens.DoesNotExist:
+        already_enabled = False
+    if already_enabled:
+        return Response(
+            {'detail': '2FA is already enabled. Disable it before setting a new secret.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    new_secret = (request.data.get('secretcode') or '').strip()
+    otp_code = (request.data.get('code') or '').strip()
+    if not new_secret or not otp_code:
+        return Response(
+            {'detail': 'secretcode and code are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cache_key = get_2fa_cache_key(request.user)
+    pending = cache.get(cache_key)
+    if not pending:
+        return Response(
+            {'2fa_enabled': False, 'code': 'expire'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pending = str(pending)
+    if len(pending) != len(new_secret) or not hmac.compare_digest(pending, new_secret):
+        return Response(
+            {'detail': 'secretcode does not match the pending secret.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not TwoFactorSecretTokens.check_g_otp(pending, otp_code):
+        return Response(status=status.HTTP_400_BAD_REQUEST)
+
+    TwoFactorSecretTokens.set_code(request.user, pending)
+    cache.delete(cache_key)
     return Response({'2fa_enabled': True}, status=status.HTTP_200_OK)
 
 
