@@ -3,6 +3,7 @@ import logging
 from django.db import models
 from django.db.models import Count, Case, When, Q, IntegerField
 from django.db.transaction import atomic
+from django.db.utils import IntegrityError
 from django.utils.translation import ugettext_lazy as _
 from rest_framework.exceptions import ValidationError
 
@@ -108,13 +109,42 @@ class WalletTransactions(BaseModel):
         indexes = [
             models.Index(fields=['state']),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['wallet', 'tx_hash'],
+                name='core_wallettransactions_wallet_tx_hash_uniq',
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         assert self.amount > 0
+        if self.tx_hash:
+            self.tx_hash = self.tx_hash.lower()
         is_insert = self._state.adding is True
         super(WalletTransactions, self).save(*args, **kwargs)
         if is_insert:
             self.__check_deposit()
+
+    @classmethod
+    def get_or_create_for_chain_tx(cls, *, tx_hash, currency, amount, wallet=None, wallet_id=None):
+        """
+        Insert one deposit for a chain event. Returns (row, created).
+        """
+        tx_hash = (tx_hash or '').lower()
+        lookup = {'tx_hash': tx_hash}
+        if wallet is not None:
+            lookup['wallet'] = wallet
+        elif wallet_id is not None:
+            lookup['wallet_id'] = wallet_id
+        else:
+            raise ValueError('wallet or wallet_id is required')
+        try:
+            return cls.objects.get_or_create(
+                **lookup,
+                defaults={'currency': currency, 'amount': amount},
+            )
+        except IntegrityError:
+            return cls.objects.get(**lookup), False
 
     def __check_deposit(self):
         deposit_min_limit = FeesAndLimits.get_limit(self.currency.code, FeesAndLimits.DEPOSIT,
@@ -192,9 +222,20 @@ class WalletTransactions(BaseModel):
     def topup_tx(self):
         from core.utils.wallet_history import create_or_update_wallet_history_item_from_transaction
 
-        if not self.transaction:
-            # delete this later. Tx created at first save
-            with atomic():
+        with atomic():
+            locked = (
+                WalletTransactions.objects
+                .select_for_update()
+                .select_related('transaction')
+                .filter(pk=self.pk)
+                .first()
+            )
+            if locked is None:
+                return self
+
+            tx = locked.transaction
+            if not tx:
+                # delete this later. Tx created at first save
                 self.state = self.STATE_WAITING_FOR_ACCUMULATION
                 self.transaction = Transaction.topup(
                     user_id=self.wallet.user_id,
@@ -205,11 +246,12 @@ class WalletTransactions(BaseModel):
                 self.save()
                 create_or_update_wallet_history_item_from_transaction(self.transaction)
                 return self
-        else:
-            if self.transaction.is_pending:
-                self.transaction.save(update_balance_pending=True)
-                create_or_update_wallet_history_item_from_transaction(self.transaction)
-                return self
+
+            self.transaction = tx
+            if tx.is_pending:
+                tx.save(update_balance_pending=True)
+                create_or_update_wallet_history_item_from_transaction(tx)
+            return self
 
 
     def _revert(self):

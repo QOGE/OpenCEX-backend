@@ -450,17 +450,6 @@ class TronHandler(BaseEVMCoinHandler):
             log.error(f'Wallet TRX {tx.to_addr} not exists or blocked')
             return
 
-        # is already processed?
-        db_wallet_transaction = WalletTransactions.objects.filter(
-            tx_hash__iexact=tx.hash,
-            wallet_id=db_wallet.id,
-        ).first()
-
-        if db_wallet_transaction is not None:
-            log.warning('TX %s already processed as TRX deposit', tx.hash)
-            return
-
-        # make deposit
         # check for keeper deposit
         if db_wallet.address == trx_keeper.address:
             log.info('TX %s is keeper TRX deposit: %s', tx.hash, amount)
@@ -479,12 +468,15 @@ class TronHandler(BaseEVMCoinHandler):
             )
             return
 
-        WalletTransactions.objects.create(
+        db_wallet_transaction, created = WalletTransactions.get_or_create_for_chain_tx(
             wallet=db_wallet,
             tx_hash=tx.hash,
-            amount=amount,
             currency=TRX_CURRENCY,
+            amount=amount,
         )
+        if not created:
+            log.warning('TX %s already processed as TRX deposit', tx.hash)
+            return
         log.info('TX %s processed as %s TRX deposit', tx.hash, amount)
 
     @classmethod
@@ -532,14 +524,6 @@ class TronHandler(BaseEVMCoinHandler):
             log.error('Wallet %s %s not exists or blocked', token.currency, token_to_addr)
             return
 
-        db_wallet_transaction = WalletTransactions.objects.filter(
-            tx_hash__iexact=tx.hash,
-            wallet_id=db_wallet.id,
-        ).first()
-        if db_wallet_transaction is not None:
-            log.warning(f'TX {tx.hash} already processed as {token.currency} deposit')
-            return
-
         # check for keeper deposit
         if db_wallet.address == trx_keeper.address:
             log.info(f'TX {tx.hash} is keeper {token.currency} deposit: {token_amount}')
@@ -559,13 +543,15 @@ class TronHandler(BaseEVMCoinHandler):
             )
             return
 
-        WalletTransactions.objects.create(
+        db_wallet_transaction, created = WalletTransactions.get_or_create_for_chain_tx(
             wallet_id=db_wallet.id,
             tx_hash=tx.hash,
-            amount=token_amount,
             currency=token.currency,
+            amount=token_amount,
         )
-
+        if not created:
+            log.warning(f'TX {tx.hash} already processed as {token.currency} deposit')
+            return
         log.info(f'TX {tx.hash} processed as {token_amount} {token.currency} deposit')
 
     @classmethod

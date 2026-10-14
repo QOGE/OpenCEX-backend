@@ -270,25 +270,18 @@ class CoinServiceBase:
             self.log.error('Wallet %s does not exist', address)
             return
 
-        wallet_transaction = WalletTransactions.objects.filter(
-            wallet_id=wallet.id,
-            tx_hash=tx_hash,
-            currency=self.currency,
-            amount=amount,
-        ).first()
-
-        if wallet_transaction is not None:
-            self.log.warning('Deposit %s %s for address %s already been processed, skipping',
-                             self.currency.code, amount, address)
-            return
-
-        # make deposit
-        WalletTransactions.objects.create(
+        wallet_transaction, created = WalletTransactions.get_or_create_for_chain_tx(
             wallet_id=wallet.id,
             tx_hash=tx_hash,
             currency=self.currency,
             amount=amount,
         )
+
+        if not created:
+            self.log.warning('Deposit %s %s for address %s already been processed, skipping',
+                             self.currency.code, amount, address)
+            return
+
         self.log.info('Deposit %s %s for address %s processed', self.currency.code, amount, address)
 
     def check_for_scoring(self):

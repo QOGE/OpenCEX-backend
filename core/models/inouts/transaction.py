@@ -143,16 +143,33 @@ class Transaction(UserMixinModel, BaseModel):
         assert self.state in [TRANSACTION_PENDING, TRANSACTION_COMPLETED]
 
         def _save():
-            if not update_balance_pending and update_balance_on_adding and self._state.adding:
-                self.update_balance()
-
-            if update_balance_pending and self.state in [TRANSACTION_PENDING]:
+            if update_balance_pending:
+                if self.pk is None:
+                    raise ValueError('update_balance_pending requires a saved transaction')
+                locked = self.__class__.objects.select_for_update().filter(
+                    pk=self.pk,
+                    state=TRANSACTION_PENDING,
+                ).first()
+                if locked is None:
+                    logger.info(
+                        'Skip pending balance credit for transaction %s; row is not PENDING',
+                        self.pk,
+                    )
+                    try:
+                        self.refresh_from_db()
+                    except self.__class__.DoesNotExist:
+                        pass
+                    return self
                 self.state = TRANSACTION_COMPLETED
+                self.update_balance()
+                return super(Transaction, self).save(*args, **kwargs)
+
+            if update_balance_on_adding and self._state.adding:
                 self.update_balance()
 
             return super(Transaction, self).save(*args, **kwargs)
 
-        if atomic:
+        if atomic or update_balance_pending:
             with transaction.atomic():
                 return _save()
 
