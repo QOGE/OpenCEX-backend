@@ -1,5 +1,7 @@
 import os
 
+from django.core.exceptions import ImproperlyConfigured
+
 from exchange.settings import env
 
 DISABLE_REGISTRATION = False
@@ -12,8 +14,35 @@ FILE_CHARSET = 'utf-8'
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'l35966o%0mtqpv+y@)^f=he6$p82ut=j6ea=hpndz!&$)1m@ck'
+# SECURITY WARNING: keep the secret key used in production secret.
+# The previous OpenCEX default was public in git and is rejected below.
+_LEAKED_DJANGO_SECRET_KEY = 'l35966o%0mtqpv+y@)^f=he6$p82ut=j6ea=hpndz!&$)1m@ck'
+
+
+def _secret_key_from_env():
+    try:
+        key = env('SECRET_KEY')
+    except ImproperlyConfigured:
+        key = None
+    if key is None or not str(key).strip():
+        raise ImproperlyConfigured(
+            'SECRET_KEY must be set in the environment (.env). '
+            'Refusing to start with a missing key.'
+        )
+    key = str(key).strip()
+    if key == _LEAKED_DJANGO_SECRET_KEY:
+        raise ImproperlyConfigured(
+            'SECRET_KEY is the public OpenCEX default from source control. '
+            'Set a unique SECRET_KEY in .env and restart.'
+        )
+    if len(key) < 50:
+        raise ImproperlyConfigured(
+            'SECRET_KEY is too short. Use at least 50 random characters.'
+        )
+    return key
+
+
+SECRET_KEY = _secret_key_from_env()
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG', default=False)

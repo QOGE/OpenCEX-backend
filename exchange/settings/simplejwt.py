@@ -1,4 +1,6 @@
 from datetime import timedelta
+
+from exchange.settings.common import SECRET_KEY
 """
 default settings
 
@@ -42,5 +44,5 @@ SIMPLE_JWT = {
     'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer', 'Token',),
     'ALGORITHM': 'HS512',
-
+    'SIGNING_KEY': SECRET_KEY,
 }
