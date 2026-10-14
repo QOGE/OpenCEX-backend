@@ -57,6 +57,7 @@ class ImproperlyConfigured(Exception):
 class AuthPermissionViewSetMixin:
     NOT_FOUND_PERMISSION_DEFAULT = False
     permission_map = dict()
+    MUTATING_PERMISSIONS = ('add', 'change', 'delete')
 
     def get_permission_map(self):
         permission_map = {
@@ -78,6 +79,28 @@ class AuthPermissionViewSetMixin:
         code_name = get_permission_codename(action, self._options)
         return "{0}.{1}".format(self._options.app_label, code_name)
 
+    @staticmethod
+    def _is_permission_class(perm_code):
+        return isinstance(perm_code, type) and issubclass(perm_code, BasePermission)
+
+    def _evaluate_permission(self, perm_code, request, action, obj=None):
+        if perm_code is True:
+            perm_code = 'change'
+        if perm_code is False or perm_code is None:
+            return False
+        if self._is_permission_class(perm_code):
+            checker = perm_code()
+            if not checker.has_permission(request, self):
+                return False
+            if obj is not None:
+                return checker.has_object_permission(request, self, obj)
+            return True
+        if callable(perm_code):
+            return bool(perm_code(self, action, request, obj))
+        if perm_code in ['view', 'add', 'change', 'delete']:
+            perm_code = self._make_permission_key(perm_code)
+        return request.user.has_perm(perm_code)
+
     def has_perm_action(self, action, request, obj=None):
         if not action:
             return False
@@ -86,32 +109,27 @@ class AuthPermissionViewSetMixin:
             return True
 
         perm_map = self.get_permission_map()
-        if hasattr(getattr(self, action), 'permissions'):
-            perm_map.update(**{action: getattr(self, action).permissions})
+        action_handler = getattr(self, action, None)
+        if action_handler is not None and hasattr(action_handler, 'permissions'):
+            perm_map.update(**{action: action_handler.permissions})
 
         if action not in perm_map:
             return self.NOT_FOUND_PERMISSION_DEFAULT
 
         perm_code = perm_map[action]
-        if callable(perm_code):
-            return perm_code(self, action, request, obj)
-        if isinstance(perm_code, bool):
-            return perm_code
+        if isinstance(perm_code, (list, tuple)):
+            codes = list(perm_code)
+            short = [code for code in codes if code in ('view', 'add', 'change', 'delete')]
+            if any(code in self.MUTATING_PERMISSIONS for code in short):
+                codes = [code for code in codes if code != 'view']
+            if not codes:
+                return False
+            return all(
+                self._evaluate_permission(code, request, action, obj)
+                for code in codes
+            )
 
-        if perm_code in ['view', 'add', 'change', 'delete']:
-            perm_code = self._make_permission_key(perm_code)
-
-        # checks list of permissions
-        if isinstance(perm_code, list) or isinstance(perm_code, tuple):
-            for code in perm_code:
-                if code in ['view', 'add', 'change', 'delete']:
-                    code = self._make_permission_key(code)
-                has_perm = request.user.has_perm(code)
-                if has_perm:
-                    return has_perm
-            return False
-
-        return request.user.has_perm(perm_code)
+        return self._evaluate_permission(perm_code, request, action, obj)
 
 
 class IsStaffAccess(BasePermission):
@@ -941,9 +959,8 @@ def action(permissions=None, methods=['POST'], detail=False, url_path=None, url_
         @wraps(base_func)
         def wrapper(base_admin_class, request, *args, **kwargs):
             ids = request.data.get('ids')
-
-            Model = base_admin_class.serializer_class.Meta.model
-            queryset = Model.objects.filter(id__in=ids) if ids else Model.objects.none()
+            queryset = base_admin_class.filter_queryset(base_admin_class.get_queryset())
+            queryset = queryset.filter(pk__in=ids) if ids else queryset.none()
 
             res = base_func(base_admin_class, request, queryset, *args, **kwargs)
             if queryset:

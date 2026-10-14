@@ -592,7 +592,7 @@ class ExchangeUserApiAdmin(NoCreateMixin, DefaultApiAdmin):
 
     topup.short_description = 'Make Topup'
 
-    @api_admin.action(permissions=True)
+    @api_admin.action(permissions=[IsSuperAdminUser])
     def confirm_email(self, request, queryset):
         for user in queryset:
             ea = EmailAddress.objects.filter(
@@ -606,13 +606,13 @@ class ExchangeUserApiAdmin(NoCreateMixin, DefaultApiAdmin):
 
     confirm_email.short_description = 'Confirm email'
 
-    @api_admin.action(permissions=True)
+    @api_admin.action(permissions=[IsSuperAdminUser])
     def drop_2fa(self, request, queryset):
         for user in queryset:
             TwoFactorSecretTokens.drop_for_user(user)
     drop_2fa.short_description = 'Drop 2FA'
 
-    @api_admin.action(permissions=True)
+    @api_admin.action(permissions=[IsSuperAdminUser])
     def drop_sms(self, request, queryset):
         for user in queryset:
             user.profile.drop_sms()
@@ -873,7 +873,7 @@ class WithdrawalRequestAdmin(ReadOnlyMixin, RestFulModelAdmin):
         return qs.prefetch_related('user', 'user__profile')
 
     # custom actions
-    @api_admin.action(permissions=('view', 'change',))
+    @api_admin.action(permissions='change')
     def cancel_withdrawal_request(self, request, queryset):
         try:
             with transaction.atomic():
@@ -898,19 +898,19 @@ class WithdrawalRequestAdmin(ReadOnlyMixin, RestFulModelAdmin):
         return response
     export_created_eth.short_description = 'Export created ETH,USDT withdrawals'
 
-    @api_admin.action(permissions=('view', 'change',))
+    @api_admin.action(permissions='change')
     def pause(self, request, queryset):
         for wd in queryset:
             wd.pause()
     pause.short_description = 'Pause'
 
-    @api_admin.action(permissions=('view', 'change',))
+    @api_admin.action(permissions='change')
     def unpause(self, request, queryset):
         for wd in queryset:
             wd.unpause()
     unpause.short_description = 'Unpause'
 
-    @api_admin.action(permissions=('view', 'change',))
+    @api_admin.action(permissions='change')
     def approve(self, request, queryset):
         for entry in queryset:
             entry.approved = True
@@ -919,7 +919,7 @@ class WithdrawalRequestAdmin(ReadOnlyMixin, RestFulModelAdmin):
             entry.save()
     approve.short_description = 'Approve'
 
-    @api_admin.action(permissions=('view', 'change',))
+    @api_admin.action(permissions='change')
     def disable_approve(self, request, queryset):
         for entry in queryset:
             entry.approved = False
