@@ -18,6 +18,13 @@ from cryptocoins.models.scoring import ScoringSettings
 from cryptocoins.scoring.manager import ScoreManager
 from cryptocoins.tasks.scoring import process_deffered_deposit
 from cryptocoins.utils.btc import btc2sat
+from cryptocoins.utils.utxo import (
+    bind_utxo_private_keys,
+    index_unspent_by_deposit,
+    select_deposit_utxos,
+    utxo_outpoint,
+    utxo_total_amount,
+)
 from lib.cipher import AESCoderDecoder
 from lib.helpers import to_decimal
 
@@ -287,92 +294,104 @@ class QOGECoinService(BitCoreCoinServiceBase):
                     tx_id, addr, amount, block_id=block_id, block_hash=block_hash,
                 )
 
-    def accumulate_deposit(self, wallet_transaction, inputs_dict, private_keys_dict):
-        item = inputs_dict.get(wallet_transaction.tx_hash)
-        if not item:
+    def accumulate_deposit(self, wallet_transaction, inputs_index, private_keys_dict, spent_outpoints=None):
+        spent_outpoints = spent_outpoints if spent_outpoints is not None else set()
+        address = wallet_transaction.wallet.address
+        items = select_deposit_utxos(
+            inputs_index, wallet_transaction.tx_hash, address, spent=spent_outpoints,
+        )
+        if not items:
+            self.log.warning(
+                'No unspent outpoints for %s deposit %s tx %s address %s',
+                self.currency.code, wallet_transaction.id, wallet_transaction.tx_hash, address,
+            )
             return
-        private_keys_dict[item['txid'] + ':' + str(item['vout'])] = private_keys_dict[item['address']]
-        total_amount = wallet_transaction.amount
 
-        accumulation_address = wallet_transaction.external_accumulation_address or self.get_accumulation_address(total_amount)
-        accumulation_amount = 0
+        address_key = private_keys_dict.get(address)
+        if not address_key:
+            self.log.error('Missing private key for %s address %s', self.currency.code, address)
+            return
+
+        signing_keys = bind_utxo_private_keys(items, address_key, dict(private_keys_dict))
+        total_amount = utxo_total_amount(items)
+        accumulation_address = (
+            wallet_transaction.external_accumulation_address
+            or self.get_accumulation_address(total_amount)
+        )
 
         try:
-            tx_id, accumulation_amount = self.transfer_to([item], accumulation_address, total_amount, private_keys_dict)
+            tx_id, accumulation_amount = self.transfer_to(
+                items, accumulation_address, total_amount, signing_keys,
+            )
         except TransferAmountLowError:
             wallet_transaction.set_balance_too_low()
-            tx_id = None
+            self.log.info(
+                'Accumulation amount too low for %s deposit %s (%s outpoints, %s)',
+                self.currency.code, wallet_transaction.id, len(items), total_amount,
+            )
+            return
+        except Exception:
+            self.log.exception(
+                'Accumulation failed for %s deposit %s; continuing queue',
+                self.currency.code, wallet_transaction.id,
+            )
+            return
 
-        if tx_id:
-            AccumulationDetails.objects.create(
-                currency=QOGE_CURRENCY,
-                txid=tx_id,
-                from_address=item['address'],
-                to_address=accumulation_address,
+        if not tx_id:
+            return
+
+        AccumulationDetails.objects.create(
+            currency=QOGE_CURRENCY,
+            txid=tx_id,
+            from_address=address,
+            to_address=accumulation_address,
+        )
+        AccumulationTransaction.objects.create(
+            wallet_transaction=wallet_transaction,
+            amount=accumulation_amount,
+            tx_type=AccumulationTransaction.TX_TYPE_ACCUMULATION,
+            tx_hash=tx_id,
+        )
+        wallet_transaction.set_accumulation_in_progress()
+        for item in items:
+            spent_outpoints.add(utxo_outpoint(item))
+        self.log.info(
+            'Accumulation of %s outpoints from %s to %s succeeded tx %s',
+            len(items), address, accumulation_address, tx_id,
+        )
+
+    def _decrypt_keys_for_addresses(self, addresses):
+        private_keys_dict = dict(UserWallet.objects.filter(
+            currency=self.currency,
+            address__in=addresses,
+        ).values_list(
+            'address',
+            'private_key',
+        ))
+        return {
+            address: AESCoderDecoder(settings.CRYPTO_KEY).decrypt(private_key)
+            for address, private_key in private_keys_dict.items()
+        }
+
+    def _accumulate_wallet_transactions(self, to_accumulate):
+        if not to_accumulate:
+            self.log.warning('There are no addresses to accumulate')
+            return
+
+        addresses = [w.wallet.address for w in to_accumulate]
+        inputs = self.get_unspent(addresses=addresses)
+        inputs_index = index_unspent_by_deposit(inputs)
+        private_keys_dict = self._decrypt_keys_for_addresses(addresses)
+        spent_outpoints = set()
+        for wallet_transaction in to_accumulate:
+            self.accumulate_deposit(
+                wallet_transaction, inputs_index, private_keys_dict, spent_outpoints,
             )
-            AccumulationTransaction.objects.create(
-                wallet_transaction=wallet_transaction,
-                amount=accumulation_amount,
-                tx_type=AccumulationTransaction.TX_TYPE_ACCUMULATION,
-                tx_hash=tx_id,
-            )
-            wallet_transaction.set_accumulation_in_progress()
-        self.log.info('Accumulation to %s succeeded', accumulation_address)
 
     def accumulate(self):
         self.log.info('Starting accumulation: %s', self.currency.code)
-
-        to_accumulate = self.get_accumulation_ready_wallet_transactions()
-        to_accumulate_from_addresses = [w.wallet.address for w in to_accumulate]
-
-        if not to_accumulate:
-            self.log.warning('There are no addresses to accumulate')
-            return
-
-        inputs = self.get_unspent(addresses=to_accumulate_from_addresses)
-        inputs_dict = {i['txid']: i for i in inputs}
-
-        private_keys_dict = dict(UserWallet.objects.filter(
-            currency=self.currency,
-            address__in=to_accumulate_from_addresses,
-        ).values_list(
-            'address',
-            'private_key'
-        ))
-
-        private_keys_dict = {
-            address: AESCoderDecoder(settings.CRYPTO_KEY).decrypt(private_key)
-            for address, private_key in private_keys_dict.items()
-        }
-
-        for wallet_transaction in to_accumulate:
-            self.accumulate_deposit(wallet_transaction, inputs_dict, private_keys_dict)
-
-        to_accumulate = self.get_external_accumulation_ready_wallet_transactions()
-        to_accumulate_from_addresses = [w.wallet.address for w in to_accumulate]
-
-        if not to_accumulate:
-            self.log.warning('There are no addresses to accumulate')
-            return
-
-        inputs = self.get_unspent(addresses=to_accumulate_from_addresses)
-        inputs_dict = {i['txid']: i for i in inputs}
-
-        private_keys_dict = dict(UserWallet.objects.filter(
-            currency=self.currency,
-            address__in=to_accumulate_from_addresses,
-        ).values_list(
-            'address',
-            'private_key'
-        ))
-
-        private_keys_dict = {
-            address: AESCoderDecoder(settings.CRYPTO_KEY).decrypt(private_key)
-            for address, private_key in private_keys_dict.items()
-        }
-
-        for wallet_transaction in to_accumulate:
-            self.accumulate_deposit(wallet_transaction, inputs_dict, private_keys_dict)
+        self._accumulate_wallet_transactions(self.get_accumulation_ready_wallet_transactions())
+        self._accumulate_wallet_transactions(self.get_external_accumulation_ready_wallet_transactions())
 
     def transfer(self, inputs: list, outputs: dict, private_keys: dict):
         self.log.info('Make transfer %s in -> %s out', len(inputs), len(outputs))
