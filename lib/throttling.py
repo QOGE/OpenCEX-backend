@@ -6,6 +6,20 @@ app_cache = PrefixedRedisCache.get_cache(prefix='public-api-app-cache-')
 phone_verification_cache = PrefixedRedisCache.get_cache(prefix='phone-verification-cache-')
 
 
+def throttle_scope(scope):
+    """Attach a ScopedRateThrottle scope to an @api_view result or APIView class."""
+
+    def decorator(view):
+        cls = getattr(view, 'cls', None)
+        if cls is not None:
+            cls.throttle_scope = scope
+        else:
+            view.throttle_scope = scope
+        return view
+
+    return decorator
+
+
 class RedisCacheAnonRateThrottle(AnonRateThrottle):
     cache = app_cache
 

@@ -1,6 +1,11 @@
 from django.urls import path
 from django.urls.conf import include
 
+from core.views.auth import (
+    ThrottledLoginView,
+    ThrottledPasswordChangeView,
+    ThrottledPasswordResetConfirmView,
+)
 from core.views.facade import MessagesView
 from core.views.facade import RegenerateApiKey
 from core.views.facade import SourceOfFundsViewSet
@@ -19,6 +24,9 @@ from core.views.facade import save_user_language
 from core.views.facade import set_user_2fa
 
 urlpatterns = [
+    path(r'auth/login/', ThrottledLoginView.as_view()),
+    path(r'auth/password/change/', ThrottledPasswordChangeView.as_view()),
+    path(r'auth/password/reset/confirm/', ThrottledPasswordResetConfirmView.as_view()),
     path(r'auth/registration/', include('dj_rest_auth.registration.urls')),
     path(r'auth/', include('dj_rest_auth.urls')),
     path(r'check2fa/', check_user_2fa_is_on),

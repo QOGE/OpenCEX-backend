@@ -79,6 +79,7 @@ class ConfirmWithdrawalRequestView(views.APIView):
     """
     Email withdrawal confirmation link handler
     """
+    throttle_scope = 'auth_code'
     # permission_classes = [
     #     permissions.AllowAny,
     # ]
@@ -114,6 +115,7 @@ class CancelWithdrawalRequestView(views.APIView):
     """
     Email withdrawal cancelling link handler
     """
+    throttle_scope = 'auth_code'
     permission_classes = [
         permissions.AllowAny,
     ]
@@ -149,6 +151,7 @@ class WithdrawalRequestInfoView(views.APIView):
     We can make `lookup_field = 'confirmation_token'` in WithdrawalRequestView
     but it requires authorization
     """
+    throttle_scope = 'auth_code'
     permission_classes = [
         permissions.AllowAny,
     ]
@@ -177,6 +180,7 @@ class ResendWithdrawalRequestConfirmationEmailView(views.APIView):
     """
     Resend confirmation email
     """
+    throttle_scope = 'auth_code'
     @extend_schema(
         request=ResendWithdrawalRequestConfirmationEmailSerializer,
     )

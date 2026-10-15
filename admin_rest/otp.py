@@ -1,14 +1,18 @@
 """Admin Google Authenticator TOTP (RFC 6238) helpers.
 
-django-otp TOTPDevice is only used as secret storage. Verification is pyotp
-with a ±1 period window so a slightly skewed phone clock still works, without
+django-otp TOTPDevice stores the secret and last used timestep. Verification
+is pyotp with a ±1 period window. A matching timestep is consumed so the same
+code cannot be replayed. Application throttles bound guess rate instead of
 django-otp's exponential lockout.
 """
 from base64 import b32encode
 
 import pyotp
 from django.conf import settings
+from django.db import transaction
 from django_otp.plugins.otp_totp.models import TOTPDevice
+
+from lib.totp import matching_timestep
 
 
 def get_or_create_admin_device(user):
@@ -35,6 +39,24 @@ def provisioning_uri(user, secret):
 
 
 def verify_totp(secret, token):
-    if not token:
+    return matching_timestep(secret, token) is not None
+
+
+def verify_totp_device(device, token):
+    """Verify token for a stored device and consume that timestep."""
+    if device is None:
         return False
-    return bool(pyotp.TOTP(secret).verify(str(token).strip(), valid_window=1))
+    secret = device_base32_secret(device)
+    timestep = matching_timestep(secret, token)
+    if timestep is None:
+        return False
+    with transaction.atomic():
+        locked = TOTPDevice.objects.select_for_update().filter(pk=device.pk).first()
+        if locked is None:
+            return False
+        last_t = locked.last_t if locked.last_t is not None else -1
+        if timestep <= last_t:
+            return False
+        locked.last_t = timestep
+        locked.save(update_fields=['last_t'])
+        return True

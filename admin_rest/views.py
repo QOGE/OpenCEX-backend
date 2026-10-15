@@ -11,12 +11,14 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
+from lib.throttling import throttle_scope
+
 from admin_rest import restful_admin as api_admin
 from admin_rest.otp import (
     device_base32_secret,
     get_or_create_admin_device,
     provisioning_uri,
-    verify_totp,
+    verify_totp_device,
 )
 from admin_rest.serializers import UserDetailsSerializer
 from admin_rest.utils import is_valid_image, get_media_url, get_upload_filename, get_image_files
@@ -50,6 +52,7 @@ def _login_success(request, user, device=None):
     return response
 
 
+@throttle_scope('auth_login')
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
 def token_obtain_disabled(request):
@@ -62,6 +65,7 @@ def token_obtain_disabled(request):
     )
 
 
+@throttle_scope('auth_login')
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
 def login(request):
@@ -104,7 +108,7 @@ def login(request):
                 'secret': secret,
                 'otpauth_url': otpauth_url,
             }, safe=False, status=status.HTTP_200_OK)
-        if not verify_totp(secret, otp_token):
+        if not verify_totp_device(device, otp_token):
             return JsonResponse({
                 'status': False,
                 'error': 'Incorrect 2FA token',
@@ -126,7 +130,7 @@ def login(request):
             'otp_required': True,
             'error': '2FA code required',
         }, safe=False, status=status.HTTP_200_OK)
-    if not verify_totp(secret, otp_token):
+    if not verify_totp_device(device, otp_token):
         return JsonResponse({
             'status': False,
             'error': 'Incorrect 2FA token',

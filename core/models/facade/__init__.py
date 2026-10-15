@@ -252,7 +252,7 @@ class TwoFactorSecretTokens(BaseModel):
         secret = cls.objects.get(user=user).secret
         if secret:
             totp = pyotp.TOTP(secret)
-            result = cls.check_totp(totp, googlecode)
+            result = cls.check_totp(totp, googlecode, consume_key='user:{}'.format(user.id))
             if result is False:
                 fields = {
                     'user': user,
@@ -269,16 +269,22 @@ class TwoFactorSecretTokens(BaseModel):
         return True
 
     @classmethod
-    def check_g_otp(cls, secret, code):
+    def check_g_otp(cls, secret, code, consume_key=None):
         totp = pyotp.TOTP(secret)
-        return cls.check_totp(totp, code)
+        return cls.check_totp(totp, code, consume_key=consume_key or secret)
 
     @classmethod
-    def check_totp(cls, totp, code) -> bool:
-        """Google Authenticator TOTP: current period ±1 (30s)."""
-        if code is None:
+    def check_totp(cls, totp, code, consume_key=None) -> bool:
+        """Google Authenticator TOTP: current period ±1 (30s), one use per timestep."""
+        from lib.totp import totp_consume_key, verify_and_consume
+
+        secret = getattr(totp, 'secret', None)
+        if isinstance(secret, bytes):
+            secret = secret.decode('ascii')
+        if not secret:
             return False
-        return bool(totp.verify(str(code).strip(), valid_window=1))
+        key = totp_consume_key(consume_key or secret)
+        return verify_and_consume(secret, code, key)
 
     @classmethod
     def generate_secret(cls):

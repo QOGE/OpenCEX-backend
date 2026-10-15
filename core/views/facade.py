@@ -19,6 +19,7 @@ from rest_framework import status
 from rest_framework import views, viewsets
 from rest_framework.decorators import api_view
 from rest_framework.decorators import permission_classes
+from lib.throttling import throttle_scope
 from rest_framework.exceptions import ValidationError
 from rest_framework.mixins import RetrieveModelMixin, CreateModelMixin
 from rest_framework.mixins import UpdateModelMixin
@@ -402,6 +403,7 @@ class PhoneVerification(views.APIView):
 
 
 class CodePhoneVerification(views.APIView):
+    throttle_scope = 'auth_otp'
     permission_classes = [
         IsAuthenticated,
     ]
@@ -887,6 +889,7 @@ def check_user_2fa_is_on(request):
         ]
     )
 )
+@throttle_scope('auth_otp')
 @api_view(['POST'])
 def set_user_2fa(request):
     try:
@@ -951,6 +954,7 @@ def set_user_2fa(request):
         ]
     )
 )
+@throttle_scope('auth_otp')
 @api_view(['POST'])
 def remove_user_2fa(request):
     try:
@@ -991,6 +995,7 @@ def remove_user_2fa(request):
         ]
     )
 )
+@throttle_scope('auth_otp')
 @api_view(['POST'])
 def check_otp(request):
     cache_key = get_2fa_cache_key(request.user)
@@ -1018,6 +1023,7 @@ def check_otp(request):
         ]
     )
 )
+@throttle_scope('auth_otp')
 @api_view(['POST'])
 def generate_secret(request):
     secret = TwoFactorSecretTokens.generate_secret()
@@ -1048,6 +1054,7 @@ def generate_secret(request):
         ]
     )
 )
+@throttle_scope('auth_code')
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
 def resend_email_confirmation_mail(request):
