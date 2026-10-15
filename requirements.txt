@@ -74,6 +74,7 @@ Deprecated==1.2.14
 diff-match-patch==20200713
 distlib==0.3.2
 dj-rest-auth==2.2.6
+# Django 3.2 is EOL; 3.2.23 is the last 3.2.x. A 4.2+ upgrade is a dedicated project.
 Django==3.2.23
 django-admin-rangefilter==0.9.0
 django-admin-tools==0.9.2

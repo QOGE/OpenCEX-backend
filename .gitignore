@@ -32,5 +32,6 @@ maintenance_mode_state.txt
 docker-compose.yml
 .env
 .handoff/
+.wizard_complete
 save_to_self_and_delete*.txt
 !.gitkeep
