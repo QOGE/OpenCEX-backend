@@ -1,5 +1,4 @@
-import hashlib
-import uuid
+import secrets
 
 from django.conf import settings
 from django.db import transaction
@@ -18,8 +17,12 @@ from core.serializers.withdrawal import (
     ResendWithdrawalRequestConfirmationEmailSerializer, CancelWithdrawalRequestEmailSerializer
 )
 from core.tasks.inouts import send_withdrawal_confirmation_email
-from core.utils import get_rand_code
 from lib.filterbackend import FilterBackend
+
+# Email-link tokens are 64 hex chars. Anything shorter is treated as owner-only
+# (legacy 6-digit codes) so it cannot be guessed across the whole table.
+SHORT_CONFIRMATION_TOKEN_LEN = 32
+CONFIRMATION_TOKEN_BYTES = 32
 
 
 def _unconfirmed_withdrawal(request, confirmation_token=None, withdrawal_request_id=None, require_owner=False):
@@ -29,9 +32,17 @@ def _unconfirmed_withdrawal(request, confirmation_token=None, withdrawal_request
             "withdrawal_request_id": "Incorrect data.",
         }, code="incorrect_data")
 
-    if withdrawal_request_id is not None or require_owner:
-        if not getattr(request.user, 'is_authenticated', False):
-            raise NotAuthenticated()
+    token_is_short = bool(
+        confirmation_token and len(confirmation_token) < SHORT_CONFIRMATION_TOKEN_LEN
+    )
+    must_own = (
+        withdrawal_request_id is not None
+        or require_owner
+        or token_is_short
+        or bool(getattr(request.user, 'is_authenticated', False))
+    )
+    if must_own and not getattr(request.user, 'is_authenticated', False):
+        raise NotAuthenticated()
 
     expiration_date = timezone.now() - timezone.timedelta(minutes=settings.WITHDRAWAL_REQUEST_EXPIRATION_M)
     qs = WithdrawalRequest.objects.filter(
@@ -42,9 +53,9 @@ def _unconfirmed_withdrawal(request, confirmation_token=None, withdrawal_request
         qs = qs.filter(pk=withdrawal_request_id, user=request.user)
     if confirmation_token:
         qs = qs.filter(confirmation_token__iexact=confirmation_token)
-    if require_owner:
+    if must_own:
         qs = qs.filter(user=request.user)
-    return qs.only('id').first()
+    return qs.first()
 
 
 class WithdrawalRequestView(viewsets.ReadOnlyModelViewSet, viewsets.mixins.CreateModelMixin):
@@ -69,10 +80,11 @@ class WithdrawalRequestView(viewsets.ReadOnlyModelViewSet, viewsets.mixins.Creat
 
     @staticmethod
     def _make_confirmation_token(withdrawal_request: WithdrawalRequest) -> str:
-        token = get_rand_code(6)
-        while WithdrawalRequest.objects.filter(confirmation_token=token, user=withdrawal_request.user).exists():
-            token = get_rand_code(6)
-        return token
+        for _ in range(8):
+            token = secrets.token_hex(CONFIRMATION_TOKEN_BYTES)
+            if not WithdrawalRequest.objects.filter(confirmation_token=token).exists():
+                return token
+        raise RuntimeError('Could not allocate a unique confirmation token')
 
 
 class ConfirmWithdrawalRequestView(views.APIView):
@@ -115,7 +127,7 @@ class CancelWithdrawalRequestView(views.APIView):
     """
     Email withdrawal cancelling link handler
     """
-    throttle_scope = 'auth_code'
+    throttle_scope = 'withdrawal_token'
     permission_classes = [
         permissions.AllowAny,
     ]
@@ -148,10 +160,9 @@ class CancelWithdrawalRequestView(views.APIView):
 
 class WithdrawalRequestInfoView(views.APIView):
     """
-    We can make `lookup_field = 'confirmation_token'` in WithdrawalRequestView
-    but it requires authorization
+    Email-link preview. Token must be the 64-hex confirmation secret.
     """
-    throttle_scope = 'auth_code'
+    throttle_scope = 'withdrawal_token'
     permission_classes = [
         permissions.AllowAny,
     ]
@@ -160,13 +171,13 @@ class WithdrawalRequestInfoView(views.APIView):
         responses=WithdrawalSerializer,
     )
     def get(self, request, token):
-        expiration_date = timezone.now() - timezone.timedelta(minutes=settings.WITHDRAWAL_REQUEST_EXPIRATION_M)
-        withdrawal_request = WithdrawalRequest.objects.filter(
-            confirmation_token__iexact=token,
-            confirmed=False,
-            created__gt=expiration_date,
-        ).first()
-
+        if not token or len(token) < SHORT_CONFIRMATION_TOKEN_LEN:
+            return Response(data='Withdrawal request does not exists or expired',
+                            status=status.HTTP_404_NOT_FOUND)
+        withdrawal_request = _unconfirmed_withdrawal(
+            request,
+            confirmation_token=token,
+        )
         if withdrawal_request is None:
             return Response(data='Withdrawal request does not exists or expired',
                             status=status.HTTP_404_NOT_FOUND)

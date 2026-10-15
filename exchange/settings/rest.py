@@ -31,6 +31,7 @@ REST_FRAMEWORK = {
         'auth_login': '10/min',
         'auth_otp': '5/min',
         'auth_code': '10/min',
+        'withdrawal_token': '20/hour',
     },
     'EXCEPTION_HANDLER': 'lib.utils.exception_handler',
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
