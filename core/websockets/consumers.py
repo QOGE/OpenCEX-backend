@@ -1,5 +1,6 @@
 import datetime
 import logging
+import time
 from asyncio.futures import Future
 
 from asgiref.sync import sync_to_async
@@ -8,6 +9,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
 
 from core.utils.auth import get_user_from_token
+from core.websockets.groups import PRIVATE_MSG_KINDS, is_private_group
 from exchange.notifications import balance_notificator, executed_order_notificator, wallet_history_endpoint, \
     opened_orders_endpoint, closed_orders_endpoint, opened_orders_by_pair_endpoint, closed_orders_by_pair_endpoint
 from exchange.notifications import chart_notificator
@@ -36,6 +38,7 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
 
     async def connect(self):
         self.authed = Future()
+        self.token_exp = None
         await self.accept()
         # self.task = ensure_future(self.wait_auth())
         self.groups = set()
@@ -47,19 +50,48 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
         except Exception as e:
             await self.close()
 
+    def _user_id(self):
+        user = self.scope.get('user')
+        return getattr(user, 'id', None) if user else None
+
+    def _token_expired(self):
+        exp = getattr(self, 'token_exp', None)
+        return bool(exp and time.time() >= exp)
+
+    async def drop_private_subscriptions(self):
+        for grp_name in list(self.groups):
+            if is_private_group(grp_name):
+                await self.leave_group(grp_name)
+
+    async def clear_identity(self):
+        self.scope['user'] = AnonymousUser()
+        self.token_exp = None
+        self.authed = Future()
+        await self.drop_private_subscriptions()
+
     async def do_auth(self, msg):
         logger.debug('do_auth')
         try:
             token = msg.get('token', None)
             assert token
-            user, token = await sync_to_async(get_user_from_token)(token)
+            user, payload = await sync_to_async(get_user_from_token)(token)
+            new_id = user.id
+            if self._user_id() != new_id:
+                await self.drop_private_subscriptions()
             self.scope['user'] = user
-            await self.join_group(user_notificator.gen_channel(user_id=self.scope['user'].id))
-            data = user_notificator.prepare_data({'hello': self.scope['user'].username})
+            try:
+                self.token_exp = int(payload['exp'])
+            except (KeyError, TypeError, ValueError):
+                self.token_exp = None
+            await self.join_group(user_notificator.gen_channel(user_id=new_id))
+            data = user_notificator.prepare_data({'hello': user.username})
             await self.send_json(data)
+            if self.authed.done():
+                self.authed = Future()
             self.authed.set_result(user)
         except Exception as e:
-            self.authed.set_exception(e)
+            if not self.authed.done():
+                self.authed.set_exception(e)
 
     async def join_group(self, grp_name):
         await self.channel_layer.group_add(grp_name, self.channel_name)
@@ -79,20 +111,24 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
         # if not self.authed.done():
         #     return await self.do_auth(content)
 
-        if 'token' in content and content.get('token', None) is None:
-            await self.leave_group(user_notificator.gen_channel(user_id=self.scope['user'].id))
-            self.authed = Future()
-            self.scope['user'] = AnonymousUser()
+        if 'token' in content:
+            token = content.get('token', None)
+            if token is None:
+                await self.clear_identity()
+            elif self._token_expired() or not self.authed.done() or not self._user_id():
+                await self.do_auth(content)
+            if not content.get('command'):
+                return
 
-        if not self.authed.done() and 'token' in content and content.get('token', None) is not None:
-            return await self.do_auth(content)
+        if self._token_expired():
+            await self.clear_identity()
 
         command = content.get('command', None)
-        params = content.get('params', {})
+        params = content.get('params', {}) or {}
         if not command:
             return
 
-        params['user_id'] = self.scope['user'] and getattr(self.scope['user'], 'id')
+        params['user_id'] = self._user_id()
 
         if command == 'add_stack':
             await self.join_group(stack_notificator.gen_channel(**params))
@@ -145,8 +181,8 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json(data)
 
         # for authorized users
-        user = self.scope['user']
-        if user and getattr(user, 'id'):
+        user = self.scope.get('user')
+        if user and getattr(user, 'id', None):
             # if command == 'add_profile':
             #     await self.join_group(profile_notificator.gen_channel(**params))
             #     data = await sync_to_async(profile_notificator.get_data)(**params)
@@ -275,10 +311,17 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
             await self.leave_group(i)
 
     async def exchange_message(self, event):
-        data = event['data']
-        user_id = self.scope['user'] and getattr(self.scope['user'], 'id')
+        if self._token_expired():
+            await self.clear_identity()
 
-        if data['kind'] == stack_notificator.MSG_KIND:
+        data = event['data']
+        kind = data.get('kind')
+        if kind in PRIVATE_MSG_KINDS and not self._user_id():
+            return
+
+        user_id = self._user_id()
+
+        if kind == stack_notificator.MSG_KIND:
             stack = data['stack']
             data = stack_notificator.prepare_data(
                 stack,
