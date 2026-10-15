@@ -136,3 +136,28 @@ def is_valid_qoge_address(address):
     if _valid_qoge_base58(address):
         return True
     return bool(_valid_qoge_segwit(address))
+
+
+def address_to_scriptpubkey(address):
+    """Hex scriptPubKey for a Qogecoin address, including P2QPK (witness v2)."""
+    if not address or not isinstance(address, str):
+        raise ValueError('Invalid QOGE address')
+    try:
+        raw = decode_base58(address, 25)
+    except Exception:
+        raw = None
+    if raw is not None and raw[-4:] == sha256(sha256(raw[:-4]).digest()).digest()[:4]:
+        payload = raw[1:21].hex()
+        if raw[0] == QOGE_P2PKH_VERSION:
+            return '76a914{}88ac'.format(payload)
+        if raw[0] == QOGE_P2SH_VERSION:
+            return 'a914{}87'.format(payload)
+    decoded = _decode_segwit(address)
+    if decoded:
+        hrp, witver, program = decoded
+        if hrp == QOGE_HRP:
+            allowed = _WITNESS_PROGRAM_LEN.get(witver)
+            if allowed and len(program) in allowed:
+                opcode = 0x00 if witver == 0 else (0x50 + witver)
+                return '{:02x}{:02x}{}'.format(opcode, len(program), program.hex())
+    raise ValueError('Unrecognised QOGE address: {}'.format(address))

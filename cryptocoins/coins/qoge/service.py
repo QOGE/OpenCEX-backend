@@ -11,6 +11,7 @@ from cryptocoins.cache import sat_per_byte_cache
 from cryptocoins.coin_service import BitCoreCoinServiceBase
 from cryptocoins.coins.qoge import QOGE_CURRENCY
 from cryptocoins.coins.qoge.coin import QogeCoin
+from cryptocoins.coins.qoge.utils import address_to_scriptpubkey
 from cryptocoins.exceptions import CoinServiceError, TransferAmountLowError
 from cryptocoins.models import AccumulationTransaction
 from cryptocoins.models.accumulation_details import AccumulationDetails
@@ -119,7 +120,7 @@ class QOGECoinService(BitCoreCoinServiceBase):
         return sat_per_byte_cache.get('qogecoin', settings.SAT_PER_BYTES_MIN_LIMIT)
 
     def send_from_keeper(self, outputs, *args, **kwargs):
-        """Build keeper payouts with node RPC so P2QPK destinations encode correctly."""
+        """Sign keeper payouts in-process. Node only broadcasts the signed hex."""
         tx_id, raw_hex = self.build_keeper_tx(outputs, *args, **kwargs)
         if not tx_id or not raw_hex:
             return None
@@ -141,9 +142,12 @@ class QOGECoinService(BitCoreCoinServiceBase):
 
         tx_outputs[keeper_wallet.address] = to_decimal(0)
 
-        vin = [{'txid': i['txid'], 'vout': i['vout']} for i in keeper_unspent]
-        estimated_size = self._rpc_signed_tx_size(
-            vin, tx_outputs, keeper_unspent, keeper_wallet.private_key, private_key, keeper_wallet.redeem_script
+        estimated_size = self.get_multi_tx_size(
+            self.prepare_inputs(keeper_unspent),
+            self.prepare_outs(tx_outputs),
+            keeper_wallet.private_key,
+            private_key,
+            keeper_wallet.redeem_script,
         )
         transfer_fee = self.get_transfer_fee(estimated_size)
 
@@ -158,56 +162,19 @@ class QOGECoinService(BitCoreCoinServiceBase):
             raise CoinServiceError('Unable to process withdrawals, chargeback after fee less than 0')
 
         tx_outputs[keeper_wallet.address] = chargeback_amount
-        return self._rpc_build_signed(
-            vin, tx_outputs, keeper_unspent, keeper_wallet.private_key, private_key, keeper_wallet.redeem_script
+        return self.multi_tx_signed(
+            inputs=self.prepare_inputs(keeper_unspent),
+            outputs=self.prepare_outs(tx_outputs),
+            private_key=keeper_wallet.private_key,
+            private_key_s=private_key,
+            redeem_script=keeper_wallet.redeem_script,
         )
-
-    def _prevtxs(self, unspent, redeem_script):
-        prevtxs = []
-        for item in unspent:
-            prev = {
-                'txid': item['txid'],
-                'vout': item['vout'],
-                'scriptPubKey': item['scriptPubKey'],
-                'amount': item['amount'],
-            }
-            if redeem_script:
-                prev['redeemScript'] = redeem_script
-            prevtxs.append(prev)
-        return prevtxs
-
-    def _rpc_sign(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
-        raw = self.rpc.createrawtransaction(vin, tx_outputs)
-        keys = [k for k in (private_key_s, private_key) if k]
-        signed = self.rpc.signrawtransactionwithkey(raw, keys, self._prevtxs(unspent, redeem_script))
-        return signed
-
-    def _rpc_signed_tx_size(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
-        signed = self._rpc_sign(vin, tx_outputs, unspent, private_key, private_key_s, redeem_script)
-        if not signed.get('hex'):
-            raise CoinServiceError('Unable to sign QOGE keeper tx for size estimate: {}'.format(signed))
-        decoded = self.rpc.decoderawtransaction(signed['hex'])
-        return decoded.get('vsize') or decoded.get('size')
-
-    def _rpc_build_signed(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
-        signed = self._rpc_sign(vin, tx_outputs, unspent, private_key, private_key_s, redeem_script)
-        if not signed.get('complete') or not signed.get('hex'):
-            self.log.error('Unable to sign QOGE keeper tx: %s', signed)
-            raise CoinServiceError('Unable to sign QOGE keeper tx')
-        raw_hex = signed['hex']
-        return self.txid_from_raw(raw_hex), raw_hex
-
-    def _rpc_multi_transfer(self, vin, tx_outputs, unspent, private_key, private_key_s, redeem_script):
-        tx_id, raw_hex = self._rpc_build_signed(
-            vin, tx_outputs, unspent, private_key, private_key_s, redeem_script
-        )
-        return self.broadcast_raw_tx(raw_hex)
 
     @staticmethod
     def prepare_outs(outs: dict) -> list:
         return [
             {
-                'address': address,
+                'script': address_to_scriptpubkey(address),
                 'value': int(btc2sat(to_decimal(amount)))
             }
             for address, amount in outs.items()
@@ -240,6 +207,16 @@ class QOGECoinService(BitCoreCoinServiceBase):
             sig3 = self.crypto_coin.multisign(tx_obj, i, redeem_script, private_key)
             tx_obj = apply_multisignatures(tx_obj, i, redeem_script, sig1, sig3, segwit=segwit)
         return serialize(tx_obj)
+
+    def multi_tx_signed(self, inputs: list, outputs: list, private_key: str, private_key_s: str, redeem_script: str):
+        self.log.info('Make transfer %s in -> %s out', len(inputs), len(outputs))
+        raw_tx = self.multi_tx_sign(inputs, outputs, private_key, private_key_s, redeem_script)
+        return self.txid_from_raw(raw_tx), raw_tx
+
+    def get_multi_tx_size(self, inputs: list, outputs: list, private_key: str, private_key_s: str, redeem_script: str):
+        raw_tx = self.multi_tx_sign(inputs, outputs, private_key, private_key_s, redeem_script)
+        tx_decode = self.rpc.decoderawtransaction(raw_tx)
+        return tx_decode.get('vsize') or tx_decode.get('size')
 
     def check_tx_for_deposit(self, tx_data, block_id=None, block_hash=None):
         tx_id = tx_data['txid']
