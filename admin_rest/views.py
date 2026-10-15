@@ -44,6 +44,8 @@ def _login_success(request, user, device=None):
         access_token,
         settings.JWT_EXPIRATION_DELTA.total_seconds(),
         httponly=True,
+        secure=getattr(settings, 'JWT_AUTH_SECURE', True),
+        samesite=getattr(settings, 'JWT_AUTH_SAMESITE', 'Lax'),
     )
     return response
 

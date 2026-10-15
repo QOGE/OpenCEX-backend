@@ -13,6 +13,9 @@ REST_AUTH_SERIALIZERS = {
 REST_USE_JWT = True
 JWT_AUTH_COOKIE = 'jwt_auth_token'
 JWT_AUTH_REFRESH_COOKIE = 'jwt_refresh_token'
+JWT_AUTH_SECURE = True
+JWT_AUTH_HTTPONLY = True
+JWT_AUTH_SAMESITE = 'Lax'
 JWT_EXPIRATION_DELTA = datetime.timedelta(minutes=60)
 REST_AUTH_REGISTER_SERIALIZERS = {
     'REGISTER_SERIALIZER': 'core.serializers.auth.RegisterSerializer'

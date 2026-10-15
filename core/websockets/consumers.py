@@ -6,6 +6,7 @@ from asyncio.futures import Future
 from asgiref.sync import sync_to_async
 from cached_property import asyncio
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 
 from core.utils.auth import get_user_from_token
@@ -42,6 +43,22 @@ class LiveNotificationsConsumer(AsyncJsonWebsocketConsumer):
         await self.accept()
         # self.task = ensure_future(self.wait_auth())
         self.groups = set()
+        await self._auth_from_cookie()
+
+    def _cookie_token(self):
+        name = getattr(settings, 'JWT_AUTH_COOKIE', None)
+        if not name:
+            return None
+        cookies = self.scope.get('cookies') or {}
+        return cookies.get(name) or None
+
+    async def _auth_from_cookie(self):
+        token = self._cookie_token()
+        if not token:
+            return
+        await self.do_auth({'token': token})
+        if not self._user_id():
+            self.authed = Future()
 
     async def wait_auth(self):
         logger.debug('Wait_auth')
