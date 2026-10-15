@@ -1,3 +1,4 @@
+# Not included in ROOT_URLCONF. The live staff console is /apiadmin/.
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include
