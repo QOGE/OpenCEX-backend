@@ -10,6 +10,9 @@ PRIVATE_FIELD_NAMES = {
     'private key encrypted',
     'private_key',
     'password',
+    'totp_secret',
+    'otpauth_url',
+    'secret',
 }
 
 

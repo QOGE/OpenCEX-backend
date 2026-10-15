@@ -15,15 +15,25 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from lib.totp import matching_timestep
 
 
-def get_or_create_admin_device(user):
-    device = TOTPDevice.objects.filter(user=user).order_by('id').first()
-    if device:
-        return device
-    return TOTPDevice.objects.create(
-        user=user,
-        name=user.get_username() or 'admin',
-        confirmed=False,
-    )
+def get_admin_device(user):
+    return TOTPDevice.objects.filter(user=user).order_by('id').first()
+
+
+def provision_admin_device(user):
+    """Return (device, secret, created). Creates an unconfirmed device if none exists.
+
+    The secret is for an out-of-band handoff only — never return it from login.
+    """
+    device = get_admin_device(user)
+    created = False
+    if device is None:
+        device = TOTPDevice.objects.create(
+            user=user,
+            name=user.get_username() or 'admin',
+            confirmed=False,
+        )
+        created = True
+    return device, device_base32_secret(device), created
 
 
 def device_base32_secret(device):

@@ -14,7 +14,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.db.models import QuerySet
 from django.db.transaction import atomic
-from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from cryptocoins.coins.btc.service import BTCCoinService
 from cryptocoins.coins.qoge.service import QOGECoinService
@@ -42,6 +41,7 @@ from cryptocoins.coins.matic import MATIC
 
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
 from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
+from admin_rest.otp import provision_admin_device
 from cryptocoins.utils.keeper_handoff import write_secret_handoff
 from cryptocoins.utils.wallet_keys import double_encrypt
 
@@ -822,24 +822,15 @@ def main():
 
         to_write.append('Admin Info:')
         to_write.append(f'Email: {name}')
+        _, totp_secret, _ = provision_admin_device(user)
         secrets_payload['admin'] = {
             'email': name,
             'password': password,
+            'totp_secret': totp_secret,
         }
-
-        totp, is_new_totp = TOTPDevice.objects.get_or_create(
-            user=user,
-            defaults={
-                'name': user.username or user.email or 'admin',
-                'confirmed': False,
-            }
-        )
-        if totp.confirmed:
-            totp.confirmed = False
-            totp.save(update_fields=['confirmed'])
         to_write.append(
-            'Admin 2FA: after the first password login, scan the on-screen QR '
-            'with Google Authenticator and enter the 6-digit code.'
+            'Admin 2FA: totp_secret is in the wizard-credentials handoff file. '
+            'Load it in Google Authenticator, then enter the 6-digit code at login.'
         )
         to_write.append('='*10)
 

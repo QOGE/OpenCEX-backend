@@ -15,9 +15,7 @@ from lib.throttling import throttle_scope
 
 from admin_rest import restful_admin as api_admin
 from admin_rest.otp import (
-    device_base32_secret,
-    get_or_create_admin_device,
-    provisioning_uri,
+    get_admin_device,
     verify_totp_device,
 )
 from admin_rest.serializers import UserDetailsSerializer
@@ -67,7 +65,7 @@ def token_obtain_disabled(request):
 @api_view(['POST'])
 @permission_classes((AllowAny, ))
 def login(request):
-    """Authenticate staff. First login enrolls Google Authenticator; later logins need the 6-digit code."""
+    """Authenticate staff. TOTP is provisioned out-of-band; login never returns the secret."""
     error = {'status': False, 'error': 'Incorrect username or password'}
     error_response = JsonResponse(error, safe=False, status=status.HTTP_400_BAD_REQUEST)
 
@@ -94,33 +92,12 @@ def login(request):
         return _login_success(request, user)
 
     otp_token = (request.data.get('otp_token') or '').strip()
-    device = get_or_create_admin_device(user)
-    secret = device_base32_secret(device)
-    otpauth_url = provisioning_uri(user, secret)
-
-    if not device.confirmed:
-        if not otp_token:
-            return JsonResponse({
-                'status': False,
-                'otp_setup_required': True,
-                'secret': secret,
-                'otpauth_url': otpauth_url,
-            }, safe=False, status=status.HTTP_200_OK)
-        if not verify_totp_device(device, otp_token):
-            return JsonResponse({
-                'status': False,
-                'error': 'Incorrect 2FA token',
-                'otp_setup_required': True,
-                'secret': secret,
-                'otpauth_url': otpauth_url,
-            }, safe=False, status=status.HTTP_400_BAD_REQUEST)
-        device.confirmed = True
-        device.throttling_failure_count = 0
-        device.throttling_failure_timestamp = None
-        device.save(update_fields=[
-            'confirmed', 'throttling_failure_count', 'throttling_failure_timestamp',
-        ])
-        return _login_success(request, user, device)
+    device = get_admin_device(user)
+    if device is None:
+        return JsonResponse({
+            'status': False,
+            'error': 'Admin 2FA is not provisioned',
+        }, safe=False, status=status.HTTP_400_BAD_REQUEST)
 
     if not otp_token:
         return JsonResponse({
@@ -134,6 +111,14 @@ def login(request):
             'error': 'Incorrect 2FA token',
             'otp_required': True,
         }, safe=False, status=status.HTTP_400_BAD_REQUEST)
+
+    if not device.confirmed:
+        device.confirmed = True
+        device.throttling_failure_count = 0
+        device.throttling_failure_timestamp = None
+        device.save(update_fields=[
+            'confirmed', 'throttling_failure_count', 'throttling_failure_timestamp',
+        ])
 
     return _login_success(request, user, device)
 
