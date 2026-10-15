@@ -25,7 +25,7 @@ from admin_rest.utils import is_valid_image, get_media_url, get_upload_filename,
 
 log = logging.getLogger(__name__)
 
-from rest_framework_simplejwt.tokens import RefreshToken
+from admin_rest.permissions import IsSuperAdminUser, issue_admin_tokens
 
 
 DEVICE_ID_SESSION_KEY = 'otp_device_id'
@@ -35,9 +35,7 @@ def _login_success(request, user, device=None):
     if device is not None:
         request.session[DEVICE_ID_SESSION_KEY] = device.persistent_id
         request.user.otp_device = device
-    refresh = RefreshToken.for_user(user)
-    access_token = str(refresh.access_token)
-    refresh_token = str(refresh)
+    access_token, refresh_token = issue_admin_tokens(user)
     response = JsonResponse(
         {'status': True, 'access_token': access_token, 'refresh_token': refresh_token},
         safe=False,
@@ -141,6 +139,7 @@ def login(request):
 
 
 @api_view(['POST', 'PUT'])
+@permission_classes((IsSuperAdminUser, ))
 def permissions(request):
     """Add/change permissions of selected group"""
     user = request.user
@@ -187,6 +186,7 @@ def permissions(request):
 
 
 @api_view(['GET'])
+@permission_classes((api_admin.IsStaffAccess, ))
 def me(request):
     """Current user info"""
     user = request.user
@@ -196,6 +196,7 @@ def me(request):
 
 
 @api_view(['GET'])
+@permission_classes((api_admin.IsStaffAccess, ))
 def models(request):
     """List of all registered models names in form: ['<app_name>/<model_name>', ...]"""
     registered_models = api_admin.site.get_registered_models()
@@ -211,6 +212,7 @@ def resources(request):
 
 
 @api_view(['GET'])
+@permission_classes((api_admin.IsStaffAccess, ))
 def navigation(request):
     """Vue admin side navigation"""
     navigation = api_admin.site.make_navigation(request.user)

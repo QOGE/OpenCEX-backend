@@ -30,6 +30,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.serializers import ModelSerializer
 from rest_framework.serializers import SerializerMethodField
 
+from admin_rest.permissions import token_has_admin_otp
 from admin_rest.fields import CurrencySerialRestField
 from admin_rest.fields import ForeignSerialField
 from admin_rest.filters import GenericAllFieldsFilter
@@ -134,11 +135,16 @@ class AuthPermissionViewSetMixin:
 
 class IsStaffAccess(BasePermission):
     """
-    Allows access only to authenticated Trainee users.
+    Staff JWT from POST /apiadmin/login/ only (otp_verified claim).
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.is_staff)
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.is_staff
+            and token_has_admin_otp(request)
+        )
 
     def has_object_permission(self, request, view, obj):
         """
