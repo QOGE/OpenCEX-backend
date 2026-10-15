@@ -10,6 +10,7 @@ from cryptocoins.exceptions import WalletNotFound
 from cryptocoins.models.keeper import GasKeeper
 from cryptocoins.models.keeper import Keeper
 from cryptocoins.models.last_processed_block import LastProcessedBlock
+from cryptocoins.utils.wallet_keys import gas_keeper_password_for, unwrap_after_crypto_key
 from lib.cipher import AESCoderDecoder
 
 log = logging.getLogger(__name__)
@@ -76,11 +77,16 @@ def get_keeper_wallet(symbol: Union[str, Currency], gas_keeper=False) -> Blockch
     if result is None:
         raise KeeperNotFound(currency.code)
 
+    layer1 = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(result[1])
+    if gas_keeper:
+        layer1 = unwrap_after_crypto_key(
+            layer1,
+            gas_keeper_password_for(currency.code),
+        )
+
     return BlockchainAccount(
         address=result[0],
-        private_key=AESCoderDecoder(settings.CRYPTO_KEY).decrypt(
-            result[1]
-        )
+        private_key=layer1,
     )
 
 

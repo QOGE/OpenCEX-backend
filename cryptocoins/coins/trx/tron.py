@@ -297,7 +297,7 @@ class TronHandler(BaseEVMCoinHandler):
                 continue
 
         keeper_wallet = cls.COIN_MANAGER.get_keeper_wallet()
-        gas_keeper_wallet = cls.COIN_MANAGER.get_keeper_wallet()
+        gas_keeper_wallet = cls.COIN_MANAGER.get_gas_keeper_wallet()
         trx_addresses = set(cls.COIN_MANAGER.get_user_addresses())
 
         trx_addresses_deps = set(trx_addresses)

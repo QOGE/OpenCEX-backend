@@ -2,6 +2,7 @@ import logging
 from django.db.models.query import QuerySet
 
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 
 from cryptocoins.coins.btc import BTC_CURRENCY
@@ -14,6 +15,8 @@ from cryptocoins.models import Keeper
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
 from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
 from cryptocoins.utils.commons import create_keeper
+from cryptocoins.utils.keeper_handoff import write_secret_handoff
+from cryptocoins.utils.wallet_keys import double_encrypt
 from lib.cipher import AESCoderDecoder
 
 log = logging.getLogger(__name__)
@@ -54,16 +57,27 @@ class Command(BaseCommand):
         if not new_keeper_wallet:
             raise Exception('New wallet was not created')
 
-        if not password and not is_gas_keeper:
+        if is_gas_keeper and not password:
+            password = User.objects.make_random_password()
+            self.stdout.write('Generated GasKeeper password; writing handoff (mode 600).')
+
+        if not password:
             raise Exception('Password required for Keeper generation')
 
-        if password:
-            private_key = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(new_keeper_wallet.private_key)
-            encrypted_key = AESCoderDecoder(password).encrypt(private_key)
-            dbl_encrypted_key = AESCoderDecoder(settings.CRYPTO_KEY).encrypt(encrypted_key)
-            new_keeper_wallet.private_key = dbl_encrypted_key
-            new_keeper_wallet.save()
-            log.info('Wallet successfully encrypted')
+        private_key = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(new_keeper_wallet.private_key)
+        new_keeper_wallet.private_key = double_encrypt(private_key, password)
+        new_keeper_wallet.save()
+        log.info('Wallet successfully encrypted')
+        if is_gas_keeper:
+            handoff = write_secret_handoff(
+                {
+                    'currency': currency.code,
+                    'gas_keeper_address': new_keeper_wallet.address,
+                    'gas_keeper_password': password,
+                },
+                prefix='gas-keeper',
+            )
+            self.stdout.write('GasKeeper password written to {}'.format(handoff))
 
         KeeperModel = Keeper
         if is_gas_keeper:

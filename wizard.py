@@ -43,6 +43,7 @@ from cryptocoins.coins.matic import MATIC
 from cryptocoins.utils.btc import generate_btc_multisig_keeper
 from cryptocoins.utils.qoge import generate_qoge_multisig_keeper
 from cryptocoins.utils.keeper_handoff import write_secret_handoff
+from cryptocoins.utils.wallet_keys import double_encrypt
 
 from exchange.settings import env
 from bots.models import BotConfig
@@ -945,14 +946,10 @@ def keeper_create(currency, is_gas_keeper=False):
     if not new_keeper_wallet:
         raise Exception('New wallet was not created')
 
-    password = None
-    if not is_gas_keeper:
-        password = User.objects.make_random_password()
-        private_key = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(new_keeper_wallet.private_key)
-        encrypted_key = AESCoderDecoder(password).encrypt(private_key)
-        dbl_encrypted_key = AESCoderDecoder(settings.CRYPTO_KEY).encrypt(encrypted_key)
-        new_keeper_wallet.private_key = dbl_encrypted_key
-        new_keeper_wallet.save()
+    password = User.objects.make_random_password()
+    private_key = AESCoderDecoder(settings.CRYPTO_KEY).decrypt(new_keeper_wallet.private_key)
+    new_keeper_wallet.private_key = double_encrypt(private_key, password)
+    new_keeper_wallet.save()
 
     KeeperModel = Keeper
     if is_gas_keeper:
