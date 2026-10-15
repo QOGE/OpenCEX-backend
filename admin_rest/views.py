@@ -189,7 +189,7 @@ def models(request):
 
 
 @api_view(['GET'])
-@permission_classes((AllowAny, ))
+@permission_classes((api_admin.IsStaffAccess, ))
 def resources(request):
     """List of all registered admin resources"""
     resourses = api_admin.site.get_resources()
