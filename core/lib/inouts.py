@@ -4,10 +4,8 @@ from functools import partialmethod
 
 from django.conf import settings
 from django.db.transaction import atomic
-from django.urls.base import reverse
 
 from lib.helpers import to_decimal
-from lib.utils import get_api_domain
 from lib.utils import get_domain
 
 PENDING = 0
@@ -28,7 +26,7 @@ class BasePayGate(object):
 
     @classmethod
     def cb_url(self, *args, **kwargs):
-        return'https://{}{}'.format(get_api_domain(), reverse('sci_callback', kwargs={'gate_name': self.NAME.lower()}))
+        raise NotImplementedError('SCI payment-gate callbacks are disabled')
 
     @classmethod
     def _mk_url(self, method, obj):

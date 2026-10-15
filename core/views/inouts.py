@@ -8,7 +8,7 @@ from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 from rest_framework import permissions
 from rest_framework import status
 from rest_framework import viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny
@@ -23,7 +23,7 @@ from core.models.inouts.balance import Balance
 from core.models.inouts.disabled_coin import DisabledCoin
 from core.models.inouts.fees_and_limits import FeesAndLimits
 from core.models.inouts.fees_and_limits import WithdrawalFee
-from core.models.inouts.sci import GATES, PayGateTopup, name2id
+from core.models.inouts.sci import GATES, PayGateTopup
 from core.models.inouts.transaction import Transaction
 from core.models.inouts.withdrawal import WithdrawalRequest
 from core.serializers.inouts import LastCryptoWithdrawalAddressesSerializer, TopupSerializer
@@ -383,70 +383,6 @@ class WithdrawalFeeView(GenericAPIView):
 
 def generate_remittance_id():
     return generate_random_string(length=12).upper()
-
-
-@extend_schema_view(
-    post=extend_schema(
-        responses={
-            200: OpenApiTypes.STR
-        },
-        examples=[
-            OpenApiExample(
-                'Example',
-                summary='response',
-                value='OK',
-                request_only=False,  # signal that example only applies to requests
-                response_only=True,  # signal that example only applies to responses
-            ),
-        ]
-    ),
-    get=extend_schema(
-        responses={
-            200: OpenApiTypes.STR
-        },
-        examples=[
-            OpenApiExample(
-                'Example',
-                summary='response',
-                value='OK',
-                request_only=False,  # signal that example only applies to requests
-                response_only=True,  # signal that example only applies to responses
-            ),
-        ]
-    ),
-)
-@api_view(['POST', 'GET'])
-@permission_classes((AllowAny,))
-def interaction(request, gate_name):
-    if request.method == 'GET':
-        data = {i: request.GET[i] for i in request.GET.keys()}
-    else:
-        data = {i: request.data[i] for i in request.data.keys()}
-
-    gate_id = gate_name if gate_name.isdigit() else name2id(gate_name)
-    PayGateTopup.update_from_notification(gate_id, data)
-    return Response('OK', status=status.HTTP_200_OK)
-
-
-@extend_schema_view(
-    post=extend_schema(exclude=True,),
-    get=extend_schema(exclude=True,),
-)
-@api_view(['POST', 'GET'])
-@permission_classes((AllowAny,))
-def interaction_dev(request, gate_name):
-    if settings.DEBUG is False:
-        return Response('Disabled in prod mode', status=status.HTTP_400_BAD_REQUEST)
-
-    if request.method == 'GET':
-        data = request.GET
-    else:
-        data = request.data
-
-    gate_id = gate_name if gate_name.isdigit() else name2id(gate_name)
-
-    PayGateTopup.update_from_notification(gate_id, data)
-    return Response({'status': True}, status=status.HTTP_200_OK)
 
 
 class TopupRequestView(viewsets.ReadOnlyModelViewSet, viewsets.mixins.CreateModelMixin):

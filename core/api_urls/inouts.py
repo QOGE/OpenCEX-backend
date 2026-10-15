@@ -3,8 +3,8 @@ from django.urls import path
 from django.urls.conf import include
 from rest_framework.routers import DefaultRouter
 
-from core.views.inouts import BalanceView, PortfolioBalanceView, TopupRequestView, interaction, \
-    interaction_dev, topup_amount, check_status_topup, withdraw_amount, BalanceByCurrencyView
+from core.views.inouts import BalanceView, PortfolioBalanceView, TopupRequestView, \
+    topup_amount, check_status_topup, withdraw_amount, BalanceByCurrencyView
 from core.views.inouts import CoinsStatusView
 from core.views.inouts import FeesLimitsView
 from core.views.inouts import WithdrawalFeeView
@@ -17,8 +17,6 @@ sci_router = DefaultRouter()
 sci_router.register(r'topup', TopupRequestView, basename='topup')
 
 sci_urls = [
-    path('interaction/<str:gate_name>/', interaction, name='sci_callback'),
-    path('interaction_dev/<str:gate_name>/', interaction_dev, name='sci_callback_dev'),
     path('topup_amount/', topup_amount, name='topup_amount'),
     path('topup/check/status', check_status_topup, name='check_status_topup'),
     path('withdraw_amount/', withdraw_amount, name='withdraw_amount'),
