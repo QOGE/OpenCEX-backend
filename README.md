@@ -1,28 +1,20 @@
 <p align="center">
-  <a href="https://polygant.net/opencex/" target="_blank">
-    <img alt="OpenCEX Logo" width="500" src="https://github.com/Polygant/OpenCEX/blob/master/logo.png">
-  </a>
+  <img alt="OpenCEX Logo" width="500" src="https://github.com/QOGE/OpenCEX/blob/master/logo.png">
 </p>
 
 <p align="center">
-OpenCEX is a free and open source cryptocurrency exchange platform.<br>
-Developed by <a href="https://polygant.net" target="_blank">Polygant</a>.  
-
-<p align="center">
-<a href="https://polygant.notion.site/OpenCEX-Help-Center-8cf8c842bde947c3818a615a88ceef9c" target="_blank">OpenCEX documentation</a> | <a href="https://t.me/opencex" target="_blank">Telegram chat</a>
+Django backend for the QOGE fork of unmaintained Polygant OpenCEX.
 </p>
 
 > [!CAUTION]
-> This repository is not maintained.  
-> The code is provided as-is.
+> Upstream Polygant OpenCEX is not maintained. The original code is provided as-is under Apache License 2.0.
 
-<p align="center"><b>Please go to the main repo to install OpenCEX <a href="https://github.com/Polygant/OpenCEX/">https://github.com/Polygant/OpenCEX/</a></b></p>
+Install from the main repo: [https://github.com/QOGE/OpenCEX](https://github.com/QOGE/OpenCEX).
 
-## Can I hire you guys?
+**Bitcoin (BTC) is not supported.** Listed markets: **QOGE-USDT** (the only USDT pair) and inverted **ETH-QOGE**, **TRX-QOGE**, **BNB-QOGE** (QOGE is the quote).
 
-OpenCEX was created and backed by Polygant, and is supported through all the years. You can request a consultation or order web and mobile development services by Polygant, just visit our site. 😎
-
-Say hi: [hello@polygant.net](mailto:hello@polygant.net) . We will be happy to work with you!
+QOGE custody uses a host Qogecoin Core daemon (RPC 8332). Python 3.8 / Django 3.2.25.
 
 ## License
-Apache License, Version 2.0
+
+Apache License, Version 2.0. Original OpenCEX was developed by [Polygant](https://polygant.net).
