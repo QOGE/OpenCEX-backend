@@ -248,7 +248,7 @@ class TwoFactorSecretTokens(BaseModel):
     def check_g_code(cls, user, googlecode):
         user = cls.ensure_user(user)
         if not user:
-            return True
+            return False
         secret = cls.objects.get(user=user).secret
         if secret:
             totp = pyotp.TOTP(secret)
