@@ -34,4 +34,5 @@ docker-compose.yml
 .handoff/
 .wizard_complete
 save_to_self_and_delete*.txt
+tokens.json
 !.gitkeep
